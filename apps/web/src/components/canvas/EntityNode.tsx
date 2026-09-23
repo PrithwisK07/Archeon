@@ -32,6 +32,10 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
   // Count active SQL snippets assigned to this exact entity
   const attachedSnippets = present.customSql?.filter(sql => sql.targetEntity === entity.name) || [];
 
+  // Evaluate Topology Metadata
+  const hasIndexes = entity.indexes && entity.indexes.length > 0;
+  const hasCompositePk = entity.primaryKey && entity.primaryKey.length > 1;
+
   // --- ACTIONS ---
 
   const handleAddRow = () => {
@@ -273,30 +277,50 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
         )}
       </div>
 
-      {/* Footer Controls (Add Field + AI Trigger Assistant) */}
-      <div className="border-t border-white/5 p-2 bg-[#0A0A0A] rounded-b-lg flex items-center justify-between gap-2 nodrag nopan" onMouseDown={e => e.stopPropagation()}>
-        <button 
-          onClick={handleAddRow}
-          className="flex-1 py-1.5 flex items-center justify-center gap-1.5 text-[10px] font-mono text-white/40 hover:text-white hover:bg-white/[0.04] rounded transition-all border border-dashed border-white/10 hover:border-white/20 group/btn"
-        >
-          <svg className="w-3 h-3 transition-transform group-hover/btn:scale-110" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-          ADD FIELD
-        </button>
+      {/* Footer Controls (Topology Metadata + Actions) */}
+      <div className="border-t border-white/5 p-2 bg-[#0A0A0A] rounded-b-lg flex flex-col gap-2 nodrag nopan" onMouseDown={e => e.stopPropagation()}>
+        
+        {/* Topology Metadata Badges (Conditionally Rendered) */}
+        {(hasIndexes || hasCompositePk) && (
+          <div className="flex items-center gap-2 px-1">
+            {hasIndexes && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1 font-mono tracking-wider" title="Has Advanced Indexes">
+                🗂️ {entity.indexes!.length} IDX
+              </span>
+            )}
+            {hasCompositePk && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1 font-mono tracking-wider" title={`Composite Primary Key: [${entity.primaryKey!.join(', ')}]`}>
+                🔑 CPK
+              </span>
+            )}
+          </div>
+        )}
 
-        <button
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent('open-sql-assistant', { detail: { entityId: id, entityName: entity.name } }));
-          }}
-          className={`px-3 py-1.5 flex items-center justify-center gap-1.5 text-[10px] font-mono rounded transition-all border ${
-            attachedSnippets.length > 0 
-              ? 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30 hover:bg-indigo-500/20 shadow-[0_0_10px_rgba(99,102,241,0.2)]' 
-              : 'bg-transparent text-white/40 border-white/10 hover:text-white hover:bg-white/[0.04] hover:border-white/20'
-          }`}
-          title="Add AI Database Trigger or Procedure"
-        >
-          <span className={attachedSnippets.length > 0 ? "text-indigo-400" : "opacity-70"}>⚡</span>
-          {attachedSnippets.length > 0 ? `${attachedSnippets.length} SQL` : 'SQL'}
-        </button>
+        {/* Core Actions */}
+        <div className="flex items-center justify-between gap-2">
+          <button 
+            onClick={handleAddRow}
+            className="flex-1 py-1.5 flex items-center justify-center gap-1.5 text-[10px] font-mono text-white/40 hover:text-white hover:bg-white/[0.04] rounded transition-all border border-dashed border-white/10 hover:border-white/20 group/btn"
+          >
+            <svg className="w-3 h-3 transition-transform group-hover/btn:scale-110" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            ADD FIELD
+          </button>
+
+          <button
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('open-sql-assistant', { detail: { entityId: id, entityName: entity.name } }));
+            }}
+            className={`px-3 py-1.5 flex items-center justify-center gap-1.5 text-[10px] font-mono rounded transition-all border ${
+              attachedSnippets.length > 0 
+                ? 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30 hover:bg-indigo-500/20 shadow-[0_0_10px_rgba(99,102,241,0.2)]' 
+                : 'bg-transparent text-white/40 border-white/10 hover:text-white hover:bg-white/[0.04] hover:border-white/20'
+            }`}
+            title="Add AI Database Trigger or Procedure"
+          >
+            <span className={attachedSnippets.length > 0 ? "text-indigo-400" : "opacity-70"}>⚡</span>
+            {attachedSnippets.length > 0 ? `${attachedSnippets.length} SQL` : 'SQL'}
+          </button>
+        </div>
       </div>
     </div>
   );

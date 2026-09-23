@@ -44,6 +44,17 @@ export const RelationEdge = memo(({
     setDropdownOpen(false);
   };
 
+  const handleOnDeleteChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    dispatchManualAction({
+      action: "UPDATE_RELATION",
+      sourceEntity: relation.sourceEntity,
+      targetEntity: relation.targetEntity,
+      sourceField: relation.sourceField,
+      targetField: relation.targetField,
+      payload: { onDelete: e.target.value as Relation['onDelete'] }
+    });
+  };
+
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
     dispatchManualAction({
@@ -59,7 +70,15 @@ export const RelationEdge = memo(({
 
   return (
     <>
-      <BaseEdge path={edgePath} markerEnd={markerEnd} style={style} />
+      {/* Explicitly adding Tailwind stroke classes ensures the line is always visible */}
+      <BaseEdge 
+        id={id}
+        path={edgePath} 
+        markerEnd={markerEnd} 
+        style={style} 
+        className="stroke-white/20 stroke-[2px] hover:stroke-indigo-500/50 transition-colors"
+      />
+      
       <EdgeLabelRenderer>
         <div
           style={{
@@ -70,7 +89,7 @@ export const RelationEdge = memo(({
           className="nodrag nopan flex items-center gap-1.5"
           onMouseDown={(e) => e.stopPropagation()}
         >
-          {/* Fully Custom Dropdown */}
+          {/* Fully Custom Dropdown for Cardinality */}
           <div className="relative flex items-center">
             {dropdownOpen && (
               <div className="fixed inset-0 z-40" onClick={() => setDropdownOpen(false)} />
@@ -102,9 +121,29 @@ export const RelationEdge = memo(({
             )}
           </div>
 
+          {/* Native Styled Dropdown for OnDelete Cascade Rules */}
+          <div className="relative flex items-center bg-[#111111] hover:bg-[#18181b] rounded-md border border-amber-500/30 shadow-lg transition-all overflow-hidden">
+            <select
+              value={relation.onDelete || 'RESTRICT'}
+              onChange={handleOnDeleteChange}
+              title="On Delete Action"
+              className="bg-transparent text-amber-300 font-mono text-[9px] font-bold px-2 py-1 pr-6 outline-none cursor-pointer appearance-none text-center"
+            >
+              <option value="RESTRICT" className="bg-[#111111] text-amber-300">RESTRICT</option>
+              <option value="CASCADE" className="bg-[#111111] text-amber-300">CASCADE</option>
+              <option value="SET NULL" className="bg-[#111111] text-amber-300">SET NULL</option>
+              <option value="SET DEFAULT" className="bg-[#111111] text-amber-300">SET DEFAULT</option>
+            </select>
+            <div className="absolute right-1.5 pointer-events-none">
+              <svg className="w-2.5 h-2.5 text-amber-400/60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+          </div>
+
           <button 
             onClick={handleDelete} 
-            className="text-rose-400 bg-[#111111] hover:bg-rose-500/20 rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-bold shadow-md border border-rose-500/30 transition-all hover:scale-105"
+            className="text-rose-400 bg-[#111111] hover:bg-rose-500/20 rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-bold shadow-md border border-rose-500/30 transition-all hover:scale-105 ml-0.5"
             title="Delete Relation"
           >
             ×

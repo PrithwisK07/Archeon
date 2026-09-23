@@ -79,12 +79,27 @@ interface Field {
   defaultValue?: string | number | boolean | null;
 }
 
+interface IndexConfig {
+  fields: string[];
+  unique?: boolean;
+  type?: "BTree" | "Hash" | "GiST" | "GIN";
+}
+
+interface Entity {
+  name: string;
+  fields: Field[];
+  indexes?: IndexConfig[];
+  primaryKey?: string[];
+}
+
 interface Relation {
   sourceEntity: string;
   targetEntity: string;
   sourceField?: string;
   targetField?: string;
   type: "ONE_TO_ONE" | "ONE_TO_MANY" | "MANY_TO_MANY";
+  onDelete?: "CASCADE" | "RESTRICT" | "SET NULL" | "SET DEFAULT";
+  onUpdate?: "CASCADE" | "RESTRICT" | "SET NULL" | "SET DEFAULT";
 }
 
 interface Endpoint {
@@ -105,7 +120,22 @@ const baseActionProperties = {
   targetMethod: { type: "string" },
   sourceEntity: { type: "string" },
   sourceField: { type: "string" },
-  payload: { type: "object" }
+  payload: { 
+    type: "object",
+    properties: {
+      name: { type: "string" },
+      fields: { type: "array" },
+      indexes: { type: "array" },
+      primaryKey: { type: "array" },
+      sourceEntity: { type: "string" },
+      targetEntity: { type: "string" },
+      sourceField: { type: "string" },
+      targetField: { type: "string" },
+      type: { type: "string" },
+      onDelete: { type: "string" },
+      onUpdate: { type: "string" }
+    }
+  }
 };
 
 const groqJsonSchema = {
