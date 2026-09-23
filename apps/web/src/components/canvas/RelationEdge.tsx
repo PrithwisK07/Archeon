@@ -75,8 +75,11 @@ export const RelationEdge = memo(({
         id={id}
         path={edgePath} 
         markerEnd={markerEnd} 
-        style={style} 
-        className="stroke-white/20 stroke-[2px] hover:stroke-indigo-500/50 transition-colors"
+        style={{
+          ...style,
+          stroke: style?.stroke ?? 'rgba(255, 255, 255, 0.2)',
+          strokeWidth: style?.strokeWidth ?? 2,
+        }}
       />
       
       <EdgeLabelRenderer>
