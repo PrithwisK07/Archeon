@@ -18,7 +18,7 @@ export class CompilerWorker {
     // 1. Generate Infrastructure
     this.generateProjectConfig(project);
     
-    // 2. Generate Prisma ORM Schema
+    // 2. Generate Prisma ORM Schema (Now handles Indexes, CPKs, and Cascades)
     this.generatePrismaSchema(project, ir);
 
     // NEW: Inject Custom SQL Migrations (Triggers, Procedures, Behavioral SQL)
@@ -87,8 +87,12 @@ export class CompilerWorker {
     };
 
     project.createSourceFile("package.json", JSON.stringify(packageJson, null, 2), { overwrite: true, scriptKind: ScriptKind.JSON });
-    // Generate .env.example to avoid destroying the developer's actual local configuration
     project.createSourceFile(".env.example", `DATABASE_URL="postgresql://postgres:password@localhost:5432/mydb?schema=public"\nPORT=3000`, { overwrite: true, scriptKind: ScriptKind.Unknown });
+  }
+
+  private formatDefault(type: string, val: any): string {
+    if (type === 'string' || type === 'uuid') return `"${val}"`;
+    return `${val}`;
   }
 
   private generatePrismaSchema(project: Project, ir: CanonicalIR) {
@@ -98,10 +102,10 @@ export class CompilerWorker {
       schema += `model ${entity.name} {\n`;
       
       let hasId = false;
+      const isCompositePk = entity.primaryKey && entity.primaryKey.length > 1;
       
       // 1. Generate standard fields
       for (const field of entity.fields) {
-        // Respect the explicit isPrimaryKey boolean
         const isPk = field.name === 'id' || field.isPrimaryKey;
         if (isPk) hasId = true;
         
@@ -111,32 +115,29 @@ export class CompilerWorker {
         else if (field.type === "datetime") typeStr = "DateTime";
         else if (field.type === "json") typeStr = "Json";
         
-        const pkAttr = isPk ? (field.type === 'uuid' ? ' @id @default(uuid())' : ' @id') : '';
+        // Only append @id to the field if it's not part of a composite primary key (@@id)
+        let pkAttr = '';
+        if (isPk && !isCompositePk) {
+           pkAttr = field.type === 'uuid' ? ' @id @default(uuid())' : ' @id';
+        }
         
-        // SMART RESOLUTION 1: Force @unique if this field is acting as a 1:1 Foreign Key
         const isOneToOneFk = ir.relations.some(r => 
           r.targetEntity === entity.name && 
           r.type === 'ONE_TO_ONE' && 
           (r.targetField === field.name || (!r.targetField && field.name === `${r.sourceEntity.toLowerCase()}Id`))
         );
         const uniqueAttr = (field.unique || isOneToOneFk) && !isPk ? ' @unique' : '';
-        
         const isNullable = field.nullable ? '?' : '';
         
-        // Implement Default Values
         let defaultAttr = '';
         if (field.defaultValue !== undefined && field.defaultValue !== null) {
-          if (field.type === 'string' || field.type === 'uuid') {
-            defaultAttr = ` @default("${field.defaultValue}")`;
-          } else {
-            defaultAttr = ` @default(${field.defaultValue})`;
-          }
+          defaultAttr = ` @default(${this.formatDefault(field.type, field.defaultValue)})`;
         }
         
         schema += `  ${field.name} ${typeStr}${isNullable}${pkAttr}${uniqueAttr}${defaultAttr}\n`;
       }
       
-      if (!hasId) {
+      if (!hasId && !isCompositePk) {
         schema += `  id String @id @default(uuid())\n`;
       }
 
@@ -164,7 +165,6 @@ export class CompilerWorker {
       for (const rel of incomingRels) {
         const relName = `Rel_${rel.sourceEntity}_${rel.targetEntity}_${rel.index}`;
         
-        // M:N Implicit Relation: The target simply gets an array back to the source. No scalar FK needed.
         if (rel.type === "MANY_TO_MANY") {
           const propBase = `${rel.sourceEntity.toLowerCase()}`;
           schema += `  ${propBase}s_${rel.index} ${rel.sourceEntity}[] @relation("${relName}")\n`;
@@ -173,30 +173,49 @@ export class CompilerWorker {
 
         const propBase = `${rel.sourceEntity.toLowerCase()}_${rel.index}`;
         
-        // SMART RESOLUTION 2: Auto-infer conventional FKs (e.g. storeId) if LLM forgot targetField
         let fkProp = rel.targetField;
         if (!fkProp) {
           const conventionalFk = `${rel.sourceEntity.toLowerCase()}Id`;
-          if (entity.fields.some(f => f.name === conventionalFk)) {
-            fkProp = conventionalFk;
-          } else {
-            fkProp = `${propBase}Id`;
-          }
+          if (entity.fields.some(f => f.name === conventionalFk)) fkProp = conventionalFk;
+          else fkProp = `${propBase}Id`;
         }
         const refProp = rel.sourceField || 'id';
 
-        // Avoid double-generating the scalar FK field if it was already generated in the field loop above
         const fieldAlreadyExists = entity.fields.some(f => f.name === fkProp);
 
         if (!fieldAlreadyExists) {
-          if (rel.type === "ONE_TO_MANY") {
-            schema += `  ${fkProp} String\n`;
-          } else if (rel.type === "ONE_TO_ONE") {
-            schema += `  ${fkProp} String @unique\n`;
-          }
+          if (rel.type === "ONE_TO_MANY") schema += `  ${fkProp} String\n`;
+          else if (rel.type === "ONE_TO_ONE") schema += `  ${fkProp} String @unique\n`;
         }
 
-        schema += `  ${propBase} ${rel.sourceEntity} @relation("${relName}", fields: [${fkProp}], references: [${refProp}])\n`;
+        // Apply Cascade rules if specified
+        let relationArgs = `fields: [${fkProp}], references: [${refProp}]`;
+        if (rel.onDelete) relationArgs += `, onDelete: ${rel.onDelete.replace(' ', '')}`;
+        if (rel.onUpdate) relationArgs += `, onUpdate: ${rel.onUpdate.replace(' ', '')}`;
+
+        schema += `  ${propBase} ${rel.sourceEntity} @relation("${relName}", ${relationArgs})\n`;
+      }
+
+      // 4. Compile Composite Primary Keys
+      if (isCompositePk) {
+        schema += `\n  @@id([${entity.primaryKey!.join(', ')}])\n`;
+      }
+
+      // 5. Compile Indexes & Composite Unique Constraints
+      if (entity.indexes && entity.indexes.length > 0) {
+        if (!isCompositePk) schema += `\n`; // Formatting spacer
+        for (const idx of entity.indexes) {
+          const fieldsStr = `[${idx.fields.join(', ')}]`;
+          const mapStr = idx.name ? `, map: "${idx.name}"` : '';
+          
+          if (idx.unique) {
+            schema += `  @@unique(${fieldsStr}${mapStr})\n`;
+          } else {
+            // Prisma specific type strings: BTree (default), Hash, GiST, GIN
+            const typeStr = idx.type && idx.type !== 'BTree' ? `, type: ${idx.type}` : '';
+            schema += `  @@index(${fieldsStr}${mapStr}${typeStr})\n`;
+          }
+        }
       }
 
       schema += `}\n\n`;
@@ -206,7 +225,6 @@ export class CompilerWorker {
   }
 
   private generateCustomSqlMigrations(project: Project, ir: CanonicalIR) {
-    // If there is no custom SQL, skip generation
     if (!ir.customSql || ir.customSql.length === 0) return;
 
     let sqlContent = `-- Custom SQL Behavioral Logic Generated by Zero-Dollar IDE\n\n`;
@@ -221,7 +239,6 @@ export class CompilerWorker {
       sqlContent += `${snippet.sql}\n\n`;
     }
 
-    // Prisma natively runs migration.sql files in this directory structure when executing `prisma migrate dev` or deploy
     project.createSourceFile(
       `prisma/migrations/0_custom_behavior_injections/migration.sql`, 
       sqlContent, 
@@ -231,7 +248,7 @@ export class CompilerWorker {
 
   private generateBaseEntity(project: Project, entity: Entity, relations: Relation[]) {
     const properties: any[] = [];
-    const referencedEntities = new Set<string>(); // Tracks entities to import
+    const referencedEntities = new Set<string>();
     
     let hasId = false;
     for (const field of entity.fields) {
@@ -244,7 +261,8 @@ export class CompilerWorker {
       });
     }
     
-    if (!hasId) {
+    const isCompositePk = entity.primaryKey && entity.primaryKey.length > 1;
+    if (!hasId && !isCompositePk) {
       properties.unshift({
         name: 'id',
         type: 'string',
@@ -323,8 +341,7 @@ export class CompilerWorker {
       });
     }
 
-    // AST Import Resolver: Generate imports for all referenced extension classes
-    referencedEntities.delete(entity.name); // Prevent self-imports
+    referencedEntities.delete(entity.name);
     const imports = Array.from(referencedEntities).map(ref => ({
       kind: StructureKind.ImportDeclaration as const,
       namedImports: [ref],
@@ -371,50 +388,22 @@ export class CompilerWorker {
 
   private generateBaseRoutes(project: Project, entity: Entity) {
     const lowerName = entity.name.toLowerCase();
-    const code = `import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
+    
+    // For auto-generated routes, we rely on standard 'id' fetching. If the table uses a Composite PK,
+    // we omit the generic /:id routes as they require custom composite querying logic in the extension layer.
+    const isCompositePk = entity.primaryKey && entity.primaryKey.length > 1;
+    
+    let code = `import { Router } from 'express';\nimport { PrismaClient } from '@prisma/client';\n\nconst prisma = new PrismaClient();\nexport const _base${entity.name}Router = Router();\n\n// AUTO-GENERATED CRUD ROUTES. DO NOT MODIFY.\n`;
+    
+    code += `_base${entity.name}Router.get('/', async (req, res) => {\n  try {\n    const records = await prisma.${lowerName}.findMany();\n    res.json(records);\n  } catch (error) {\n    res.status(500).json({ error: 'Internal Server Error' });\n  }\n});\n\n`;
+    
+    code += `_base${entity.name}Router.post('/', async (req, res) => {\n  try {\n    const record = await prisma.${lowerName}.create({ data: req.body });\n    res.status(201).json(record);\n  } catch (error) {\n    res.status(400).json({ error: 'Bad Request' });\n  }\n});\n\n`;
 
-const prisma = new PrismaClient();
-export const _base${entity.name}Router = Router();
+    if (!isCompositePk) {
+      code += `_base${entity.name}Router.get('/:id', async (req, res) => {\n  try {\n    const record = await prisma.${lowerName}.findUnique({ where: { id: req.params.id } });\n    if (!record) return res.status(404).json({ error: 'Not Found' });\n    res.json(record);\n  } catch (error) {\n    res.status(500).json({ error: 'Internal Server Error' });\n  }\n});\n\n`;
+      code += `_base${entity.name}Router.delete('/:id', async (req, res) => {\n  try {\n    await prisma.${lowerName}.delete({ where: { id: req.params.id } });\n    res.status(204).send();\n  } catch (error) {\n    res.status(400).json({ error: 'Bad Request' });\n  }\n});\n`;
+    }
 
-// AUTO-GENERATED CRUD ROUTES. DO NOT MODIFY.
-_base${entity.name}Router.get('/', async (req, res) => {
-  try {
-    const records = await prisma.${lowerName}.findMany();
-    res.json(records);
-  } catch (error) {
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-_base${entity.name}Router.get('/:id', async (req, res) => {
-  try {
-    const record = await prisma.${lowerName}.findUnique({ where: { id: req.params.id } });
-    if (!record) return res.status(404).json({ error: 'Not Found' });
-    res.json(record);
-  } catch (error) {
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
-_base${entity.name}Router.post('/', async (req, res) => {
-  try {
-    const record = await prisma.${lowerName}.create({ data: req.body });
-    res.status(201).json(record);
-  } catch (error) {
-    res.status(400).json({ error: 'Bad Request' });
-  }
-});
-
-_base${entity.name}Router.delete('/:id', async (req, res) => {
-  try {
-    await prisma.${lowerName}.delete({ where: { id: req.params.id } });
-    res.status(204).send();
-  } catch (error) {
-    res.status(400).json({ error: 'Bad Request' });
-  }
-});
-`;
     project.createSourceFile(`src/routes/base/_Base${entity.name}Routes.ts`, code, { overwrite: true });
   }
 
@@ -422,18 +411,7 @@ _base${entity.name}Router.delete('/:id', async (req, res) => {
     const extPath = `src/routes/${entity.name}Routes.ts`;
     
     if (!project.getSourceFile(extPath)) {
-      const code = `import { Router } from 'express';
-import { _base${entity.name}Router } from './base/_Base${entity.name}Routes';
-
-export const ${entity.name.toLowerCase()}Router = Router();
-
-// EXTENSION ROUTER
-// Add custom middleware, overrides, or new endpoints here.
-// e.g., ${entity.name.toLowerCase()}Router.get('/custom/search', (req, res) => { ... });
-
-// Mount the auto-generated CRUD routes
-${entity.name.toLowerCase()}Router.use('/', _base${entity.name}Router);
-`;
+      const code = `import { Router } from 'express';\nimport { _base${entity.name}Router } from './base/_Base${entity.name}Routes';\n\nexport const ${entity.name.toLowerCase()}Router = Router();\n\n// EXTENSION ROUTER\n// Add custom middleware, overrides, or new endpoints here.\n// e.g., ${entity.name.toLowerCase()}Router.get('/custom/search', (req, res) => { ... });\n\n// Mount the auto-generated CRUD routes\n${entity.name.toLowerCase()}Router.use('/', _base${entity.name}Router);\n`;
       project.createSourceFile(extPath, code, { overwrite: false });
     }
   }
@@ -448,17 +426,7 @@ ${entity.name.toLowerCase()}Router.use('/', _base${entity.name}Router);
       mounts += `app.use('/api/v1/${entity.name.toLowerCase()}s', ${routeName});\n`;
     }
 
-    const serverCode = `${imports}
-const app = express();
-app.use(express.json());
-
-${mounts}
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(\`Server is running on http://localhost:\${PORT}\`);
-});
-`;
+    const serverCode = `${imports}\nconst app = express();\napp.use(express.json());\n${mounts}\nconst PORT = process.env.PORT || 3000;\n\napp.listen(PORT, () => {\n  console.log(\`Server is running on http://localhost:\${PORT}\`);\n});\n`;
     project.createSourceFile(`src/index.ts`, serverCode, { overwrite: true });
   }
 }

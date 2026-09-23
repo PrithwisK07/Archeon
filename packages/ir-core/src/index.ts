@@ -19,11 +19,21 @@ export const FieldSchema = z.object({
   permissions: z.record(z.array(z.string())).optional(),
 });
 
+// NEW: Schema for Database Indexes
+export const IndexConfigSchema = z.object({
+  name: z.string().optional(),
+  fields: z.array(z.string()),
+  unique: z.boolean().optional(),
+  type: z.enum(["BTree", "Hash", "GiST", "GIN"]).optional(),
+});
+
 export const EntitySchema = z.object({
   id: z.string().uuid().optional(), // Optional for AI generation, assigned by UI
   name: IdentifierSchema,
   fields: z.array(FieldSchema).default([]),
   seedData: z.array(z.record(z.any())).optional(),
+  indexes: z.array(IndexConfigSchema).optional(), // NEW: Advanced topology indexes
+  primaryKey: z.array(z.string()).optional(), // NEW: Composite primary keys
 });
 
 export const RelationSchema = z.object({
@@ -32,7 +42,8 @@ export const RelationSchema = z.object({
   sourceField: z.string().optional(),
   targetField: z.string().optional(),
   type: z.enum(["ONE_TO_ONE", "ONE_TO_MANY", "MANY_TO_MANY"]),
-  cascadingDelete: z.boolean().default(false),
+  onDelete: z.enum(["CASCADE", "RESTRICT", "SET NULL", "SET DEFAULT"]).optional(), // NEW: Full cascading rules
+  onUpdate: z.enum(["CASCADE", "RESTRICT", "SET NULL", "SET DEFAULT"]).optional(), // NEW: Full cascading rules
 });
 
 export const EnumSchema = z.object({
@@ -53,7 +64,7 @@ export const ProjectConfigSchema = z.object({
   authProviders: z.array(z.enum(["jwt", "oauth_github", "oauth_google"])).default([]),
 });
 
-// NEW: Schema for raw SQL behavioral injections (Triggers, Functions, Procedures)
+// Schema for raw SQL behavioral injections (Triggers, Functions, Procedures)
 export const CustomSqlSnippetSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -69,17 +80,18 @@ export const CanonicalIRSchema = z.object({
   relations: z.array(RelationSchema),
   enums: z.array(EnumSchema),
   endpoints: z.array(EndpointSchema),
-  customSql: z.array(CustomSqlSnippetSchema).optional(), // Added customSql bucket
+  customSql: z.array(CustomSqlSnippetSchema).optional(),
 });
 
 // Export inferred types for the UI and Compiler
 export type CanonicalIR = z.infer<typeof CanonicalIRSchema>;
 export type Entity = z.infer<typeof EntitySchema>;
 export type Field = z.infer<typeof FieldSchema>;
+export type IndexConfig = z.infer<typeof IndexConfigSchema>; // Export new type
 export type Relation = z.infer<typeof RelationSchema>;
 export type Enum = z.infer<typeof EnumSchema>;
 export type Endpoint = z.infer<typeof EndpointSchema>;
-export type CustomSqlSnippet = z.infer<typeof CustomSqlSnippetSchema>; // Export the new type
+export type CustomSqlSnippet = z.infer<typeof CustomSqlSnippetSchema>;
 
 // ==========================================
 // PART 2: THE 16-ACTION DICTIONARY (LLM Sandbox)
