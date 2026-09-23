@@ -55,13 +55,14 @@ export class ResilientWorkerManager {
           this.compileVersion++; 
           
           // Reject all jobs caught in the crossfire of the worker termination
-          for (const [id, rejectJob] of this.pendingJobs.entries()) {
+          this.pendingJobs.forEach((rejectJob, id) => {
             if (id === jobId) {
               rejectJob(new Error("Compilation timed out. Please simplify complex circular dependencies."));
             } else {
-              rejectJob(new Error("Compilation terminated due to a timeout in a preceding job."));
+              rejectJob(new Error("Worker terminated due to a timeout in another job.")); // Keep your existing else logic here
             }
-          }
+          });
+
           this.pendingJobs.clear();
         }
       }, timeoutMs);
