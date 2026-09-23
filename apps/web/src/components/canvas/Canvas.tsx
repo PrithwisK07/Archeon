@@ -54,6 +54,9 @@ function CanvasInner() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  
+  // --- Layout State ---
+  const [isChatOpen, setIsChatOpen] = useState(true);
 
   // --- Modal States ---
   const [alertModal, setAlertModal] = useState<{ isOpen: boolean; message: string }>({ isOpen: false, message: "" });
@@ -227,13 +230,14 @@ function CanvasInner() {
 
       // Save the generated SQL to the AST
       dispatchManualAction({
-        action: 'ADD_CUSTOM_SQL' as any, // Bypass strict union for this custom dispatch
+        action: 'ADD_CUSTOM_SQL' as any,
         payload: {
           id: crypto.randomUUID(),
           name: `trigger_${sqlModal.entityName.toLowerCase()}_${Date.now()}`,
           targetEntity: sqlModal.entityName,
           type: "TRIGGER",
-          sql: data.sql
+          sql: data.sql,
+          prompt: sqlPrompt 
         }
       });
 
@@ -326,120 +330,145 @@ function CanvasInner() {
     }
   };
 
+  // Pre-calculate active triggers for the modal
+  const activeTriggers = sqlModal 
+    ? (currentIR.customSql?.filter(sql => sql.targetEntity === sqlModal.entityName) || [])
+    : [];
+
   return (
-    <div className="w-screen h-screen bg-[#0A0A0A] font-sans selection:bg-indigo-500/30 overflow-hidden relative">
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onConnect={onConnect}
-        isValidConnection={isValidConnection}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        fitView
-        proOptions={{ hideAttribution: true }}
-        minZoom={0.1}
-        maxZoom={2}
-        className="bg-[#0A0A0A]"
-      >
-        <Background gap={24} size={1} color="#ffffff05" />
+    <div className="w-screen h-screen bg-[#0A0A0A] font-sans selection:bg-indigo-500/30 overflow-hidden flex relative">
+      
+      {/* --- Main Canvas Area --- */}
+      <div className="flex-1 h-full relative">
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onConnect={onConnect}
+          isValidConnection={isValidConnection}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          fitView
+          proOptions={{ hideAttribution: true }}
+          minZoom={0.1}
+          maxZoom={2}
+          className="bg-[#0A0A0A]"
+        >
+          <Background gap={24} size={1} color="#ffffff05" />
 
-        <Panel position="top-left" className="m-6">
-          <div className="flex gap-2 bg-[#111111] p-1 rounded-md border border-white/10 shadow-2xl">
-            <button
-              onClick={undo}
-              disabled={past.length === 0}
-              className="px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white disabled:opacity-30 transition-colors"
-            >
-              Undo (Ctrl+Z)
-            </button>
-            <div className="w-px bg-white/10" />
-            <button
-              onClick={redo}
-              disabled={future.length === 0}
-              className="px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white disabled:opacity-30 transition-colors"
-            >
-              Redo
-            </button>
-          </div>
-        </Panel>
-
-        <Controls
-          className="bg-[#111111] border-white/10 fill-white/70"
-          showInteractive={false}
-        />
-
-        <Panel position="top-right" className="m-6 flex flex-col items-end gap-3 z-50">
-          {isDirty && (
-            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] font-mono tracking-widest uppercase shadow-lg backdrop-blur-md">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-              Uncompiled Changes
+          <Panel position="top-left" className="m-6">
+            <div className="flex gap-2 bg-[#111111] p-1 rounded-md border border-white/10 shadow-2xl">
+              <button
+                onClick={undo}
+                disabled={past.length === 0}
+                className="px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white disabled:opacity-30 transition-colors"
+              >
+                Undo (Ctrl+Z)
+              </button>
+              <div className="w-px bg-white/10" />
+              <button
+                onClick={redo}
+                disabled={future.length === 0}
+                className="px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white disabled:opacity-30 transition-colors"
+              >
+                Redo
+              </button>
             </div>
-          )}
+          </Panel>
 
-          <div className="flex items-center gap-2">
-            <button 
-              onClick={handleGitHubExportClick}
-              disabled={isCompiling || isExporting || !compiledFiles || Object.keys(compiledFiles).length === 0}
-              className={`
-                px-4 py-2 text-xs font-medium rounded-md shadow-2xl transition-all border
-                ${(!compiledFiles || Object.keys(compiledFiles).length === 0)
-                  ? 'bg-white/5 border-white/10 text-white/30 cursor-not-allowed'
-                  : isExporting
-                    ? 'bg-[#111111] border-white/10 text-white/40 cursor-wait'
-                    : 'bg-[#111111] border-white/20 text-white hover:bg-white/10'}
-              `}
-            >
-              {isExporting ? 'Pushing to Git...' : exportedRepoUrl ? 'Commit Changes' : 'Export to GitHub'}
-            </button>
+          <Controls
+            className="bg-[#111111] border-white/10 fill-white/70"
+            showInteractive={false}
+          />
 
-            <button
-              onClick={handleCompile}
-              disabled={isCompiling}
-              className={`
-                px-4 py-2 text-xs font-medium rounded-md shadow-2xl transition-all border
-                ${
-                  isCompiling
-                    ? "bg-[#111111] border-white/10 text-white/40 cursor-wait"
-                    : "bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-500 hover:shadow-indigo-500/20"
-                }
-              `}
-            >
-              {isCompiling ? "Compiling AST..." : "Generate Code"}
-            </button>
-          </div>
-        </Panel>
-
-        <Panel position="top-left" className="m-6 mt-24">
-          <Toolbar />
-        </Panel>
-
-        {/* --- Sync Status Indicator --- */}
-        <Panel position="bottom-left" className="m-6 z-50">
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-[#111111]/80 backdrop-blur-md border border-white/5 rounded-full shadow-lg">
-            {syncStatus === 'synced' && (
-              <>
-                <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
-                <span className="text-[10px] font-mono text-white/50 uppercase tracking-wider">Cloud Synced</span>
-              </>
+          <Panel position="top-right" className="m-6 flex flex-col items-end gap-3 z-50">
+            {isDirty && (
+              <div className="flex items-center gap-2 px-2.5 py-1.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] font-mono tracking-widest uppercase shadow-lg backdrop-blur-md">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                Uncompiled Changes
+              </div>
             )}
-            {syncStatus === 'syncing' && (
-              <>
-                <div className="w-2 h-2 rounded-full border border-indigo-400 border-t-transparent animate-spin" />
-                <span className="text-[10px] font-mono text-indigo-400 uppercase tracking-wider">Saving...</span>
-              </>
-            )}
-            {syncStatus === 'error' && (
-              <>
-                <div className="w-2 h-2 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]" />
-                <span className="text-[10px] font-mono text-rose-400 uppercase tracking-wider">Sync Failed</span>
-              </>
-            )}
-          </div>
-        </Panel>
-      </ReactFlow>
 
-      <ChatConsole onSumbit={handleAISubmit} isThinking={isGenerating} />
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={() => setIsChatOpen(!isChatOpen)}
+                className="px-3 py-2 bg-[#111111] border border-white/20 text-white hover:bg-white/10 rounded-md shadow-2xl text-xs font-medium transition-colors"
+              >
+                {isChatOpen ? 'Close Chat' : 'Open Chat'}
+              </button>
+
+              <button 
+                onClick={handleGitHubExportClick}
+                disabled={isCompiling || isExporting || !compiledFiles || Object.keys(compiledFiles).length === 0}
+                className={`
+                  px-4 py-2 text-xs font-medium rounded-md shadow-2xl transition-all border
+                  ${(!compiledFiles || Object.keys(compiledFiles).length === 0)
+                    ? 'bg-white/5 border-white/10 text-white/30 cursor-not-allowed'
+                    : isExporting
+                      ? 'bg-[#111111] border-white/10 text-white/40 cursor-wait'
+                      : 'bg-[#111111] border-white/20 text-white hover:bg-white/10'}
+                `}
+              >
+                {isExporting ? 'Pushing to Git...' : exportedRepoUrl ? 'Commit Changes' : 'Export to GitHub'}
+              </button>
+
+              <button
+                onClick={handleCompile}
+                disabled={isCompiling}
+                className={`
+                  px-4 py-2 text-xs font-medium rounded-md shadow-2xl transition-all border
+                  ${
+                    isCompiling
+                      ? "bg-[#111111] border-white/10 text-white/40 cursor-wait"
+                      : "bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-500 hover:shadow-indigo-500/20"
+                  }
+                `}
+              >
+                {isCompiling ? "Compiling AST..." : "Generate Code"}
+              </button>
+            </div>
+          </Panel>
+
+          <Panel position="top-left" className="m-6 mt-24">
+            <Toolbar />
+          </Panel>
+
+          {/* --- Sync Status Indicator --- */}
+          <Panel position="bottom-left" className="m-6 z-50">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-[#111111]/80 backdrop-blur-md border border-white/5 rounded-full shadow-lg">
+              {syncStatus === 'synced' && (
+                <>
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+                  <span className="text-[10px] font-mono text-white/50 uppercase tracking-wider">Cloud Synced</span>
+                </>
+              )}
+              {syncStatus === 'syncing' && (
+                <>
+                  <div className="w-2 h-2 rounded-full border border-indigo-400 border-t-transparent animate-spin" />
+                  <span className="text-[10px] font-mono text-indigo-400 uppercase tracking-wider">Saving...</span>
+                </>
+              )}
+              {syncStatus === 'error' && (
+                <>
+                  <div className="w-2 h-2 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]" />
+                  <span className="text-[10px] font-mono text-rose-400 uppercase tracking-wider">Sync Failed</span>
+                </>
+              )}
+            </div>
+          </Panel>
+        </ReactFlow>
+      </div>
+
+      {/* --- Collapsible Sidebar Area --- */}
+      <div 
+        className={`h-full border-l border-white/10 bg-[#0A0A0A] transition-all duration-300 ease-in-out relative z-40 ${
+          isChatOpen ? 'w-[400px] opacity-100' : 'w-0 opacity-0 overflow-hidden border-none'
+        }`}
+      >
+        <div className="w-[400px] h-full flex flex-col">
+          <ChatConsole onSumbit={handleAISubmit} isThinking={isGenerating} />
+        </div>
+      </div>
 
       {isEditorOpen && <EditorPanel onClose={() => setIsEditorOpen(false)} />}
 
@@ -455,6 +484,21 @@ function CanvasInner() {
                 Targeting: <span className="font-mono text-white/70">{sqlModal.entityName}</span>
               </p>
             </div>
+
+            {/* List existing triggers and their prompts */}
+            {activeTriggers.length > 0 && (
+              <div className="max-h-40 overflow-y-auto space-y-3 mb-2 pr-2 custom-scrollbar">
+                {activeTriggers.map(snippet => (
+                  <div key={snippet.id} className="bg-white/5 border border-white/10 p-3 rounded-md">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-emerald-400 text-xs">✓ Active</span>
+                      <span className="text-white/40 text-[10px] font-mono">{snippet.name}</span>
+                    </div>
+                    <p className="text-white/80 text-sm italic">"{snippet.prompt}"</p>
+                  </div>
+                ))}
+              </div>
+            )}
             
             <textarea
               value={sqlPrompt}
@@ -525,7 +569,6 @@ function CanvasInner() {
                 />
               </div>
               
-              {/* Dynamically show Commit Message input */}
               <div>
                 <label className="block text-white/70 text-xs mb-1.5 font-medium">Commit Message</label>
                 <input

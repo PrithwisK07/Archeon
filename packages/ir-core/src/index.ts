@@ -60,6 +60,7 @@ export const CustomSqlSnippetSchema = z.object({
   targetEntity: IdentifierSchema.optional(),
   type: z.enum(["TRIGGER", "FUNCTION", "STORED_PROCEDURE", "RAW_MIGRATION"]),
   sql: z.string(),
+  prompt: z.string(),
 });
 
 export const CanonicalIRSchema = z.object({
