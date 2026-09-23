@@ -25,9 +25,10 @@ export class ResilientWorkerManager {
     this.terminate();
     
     // Reject ALL overlapping jobs cleanly to prevent memory leaks/hanging UI
-    for (const [jobId, rejectJob] of this.pendingJobs.entries()) {
+    this.pendingJobs.forEach((rejectJob, jobId) => {
       rejectJob(new Error("Compiler worker crashed unexpectedly."));
-    }
+    });
+
     this.pendingJobs.clear();
     
     // Invalidate current version string
