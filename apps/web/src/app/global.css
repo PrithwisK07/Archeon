@@ -1,17 +1,64 @@
 @import "tailwindcss";
 
+:root {
+  --bg: #0b0c10;
+  --bg2: #101219;
+  --grid: rgba(255, 255, 255, 0.09);
+  --panel: rgba(255, 255, 255, 0.045);
+  --panel-solid: #14161d;
+  --border: rgba(255, 255, 255, 0.09);
+  --text: #e8e8ee;
+  --text-dim: #8a8b9a;
+  --text-faint: #565766;
+  --amber: #e08a3c;
+  --violet: #8b7ff0;
+  --cyan: #3fc6d8;
+  --rose: #e0708f;
+  --lime: #8fbf6b;
+  --font-ui: var(--font-space), 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), 'JetBrains Mono', ui-monospace, monospace;
+}
+
+body {
+  font-family: var(--font-ui);
+  background-color: var(--bg);
+  color: var(--text);
+}
+
+.font-mono {
+  font-family: var(--font-mono) !important;
+}
+
+@keyframes drift {
+  from { transform: translate(0, 0); }
+  to { transform: translate(36px, 44px); }
+}
+
+.animate-drift {
+  animation: drift 18s ease-in-out infinite alternate;
+}
+
+.animate-drift-delayed {
+  animation: drift 18s ease-in-out -7s infinite alternate;
+}
+
+/* React Flow Overrides */
 .react-flow__panel {
-  margin: 0;
+  margin: 0 !important;
 }
-.react-flow__controls {
-  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.5), 0 2px 4px -2px rgb(0 0 0 / 0.5) !important;
+.react-flow__attribution {
+  display: none !important;
 }
-.react-flow__controls-button {
-  background-color: #111111 !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
-  fill: rgba(255, 255, 255, 0.7) !important;
+.react-flow__handle.nexus-handle {
+  width: 8px !important;
+  height: 8px !important;
+  border-radius: 50% !important;
+  background: #101219 !important;
+  border: 1.5px solid #565766 !important;
+  transition: all 0.12s ease !important;
 }
-.react-flow__controls-button:hover {
-  background-color: #1a1a1a !important;
-  fill: white !important;
+.react-flow__handle.nexus-handle:hover {
+  border-color: var(--accent, #e08a3c) !important;
+  background: var(--accent, #e08a3c) !important;
+  transform: translateY(-50%) scale(1.35) !important;
 }
