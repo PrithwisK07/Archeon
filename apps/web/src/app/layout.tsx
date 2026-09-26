@@ -1,14 +1,23 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+import { Space_Grotesk, JetBrains_Mono } from 'next/font/google';
 // @ts-ignore
 import './global.css';
 
-// Initialize the Inter font for metadata and secondary text
-const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
+const spaceGrotesk = Space_Grotesk({
+  subsets: ['latin'],
+  weight: ['500', '600', '700'],
+  variable: '--font-space',
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500', '600'],
+  variable: '--font-jetbrains',
+});
 
 export const metadata: Metadata = {
-  title: 'Architecture Platform',
-  description: 'AI-driven zero-dollar enterprise architecture generator',
+  title: 'Nexus — Visual Schema Studio',
+  description: 'Design schemas, routes and relationships on a live canvas — compiled straight into a production-ready API.',
 };
 
 export default function RootLayout({
@@ -17,21 +26,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <head>
-        {/* 
-          Placeholder for Canva Fatimi or equivalent custom font. 
-          In a real production environment, you would load your custom font asset here. 
-        */}
-        <style dangerouslySetInnerHTML={{__html: `
-          @font-face {
-            font-family: 'Canva Fatimi';
-            /* src: url('/fonts/CanvaFatimi.woff2') format('woff2'); */
-            font-display: swap;
-          }
-        `}} />
-      </head>
-      <body className={`${inter.variable} bg-[#0A0A0A] text-white overflow-hidden antialiased`}>
+    <html lang="en" className={`dark ${spaceGrotesk.variable} ${jetbrainsMono.variable}`}>
+      <body className="bg-[#0b0c10] text-[#e8e8ee] overflow-hidden antialiased selection:bg-[#e08a3c]/30">
         {children}
       </body>
     </html>

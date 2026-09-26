@@ -1,32 +1,92 @@
-"use client";
+'use client';
 
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import ReactFlow, {
   Background,
-  Controls,
-  Panel,
+  BackgroundVariant,
   useReactFlow,
+  useViewport,
   Connection,
   ReactFlowProvider,
-} from "reactflow";
+} from 'reactflow';
 // @ts-ignore
-import "reactflow/dist/style.css";
-import { jsonrepair } from 'jsonrepair';
-import { useArchitectureStore } from "../../store/architectureStore";
-import { ReactFlowAdapter } from "../../lib/reactFlowAdapter";
-import { ContextOrchestrator } from "../../lib/contextOrchestrator";
-import { EntityNode } from "./EntityNode";
-import { ShadowGraph } from "@zero-dollar/compiler/src/shadowGraph";
-import { LLMResponseSchema } from "@zero-dollar/ir-core";
-import { EditorPanel } from "../editor/EditorPanel";
-import { Toolbar } from "./Toolbar";
-import { RelationEdge } from "./RelationEdge";
-import { ChatConsole } from "./ChatConsole";
+import 'reactflow/dist/style.css';
+import { useArchitectureStore } from '../../store/architectureStore';
+import { ReactFlowAdapter } from '../../lib/reactFlowAdapter';
+import { ContextOrchestrator } from '../../lib/contextOrchestrator';
+import { EntityNode } from './EntityNode';
+import { ShadowGraph } from '@zero-dollar/compiler/src/shadowGraph';
+import { EditorPanel } from '../editor/EditorPanel';
+import { Toolbar, SchemaExplorer } from './Toolbar';
+import { RelationEdge } from './RelationEdge';
+import { ChatConsole } from './ChatConsole';
+import type { CustomSqlSnippet } from '@zero-dollar/ir-core';
 
 const nodeTypes = { entityNode: EntityNode };
 const edgeTypes = { relationEdge: RelationEdge };
 
+function highlightSQLToJSX(code: string) {
+  const lines = code.split('\n');
+  const keywords =
+    /\b(CREATE OR REPLACE|CREATE|FUNCTION|PROCEDURE|TRIGGER|RETURNS|LANGUAGE|AS|BEGIN|END|RETURN|NEW|OLD|FOR EACH ROW|AFTER|BEFORE|INSERT|UPDATE|DELETE|ON|EXECUTE FUNCTION|SELECT|FROM|WHERE|INTO|VALUES)\b/g;
+
+  return lines.map((line, lineIdx) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('--')) {
+      return (
+        <div key={lineIdx} className="text-[#565766] italic">
+          {line}
+        </div>
+      );
+    }
+
+    const parts = line.split(keywords);
+    return (
+      <div key={lineIdx}>
+        {parts.map((part, i) =>
+          keywords.test(part) ? (
+            <span key={i} className="text-[#8b7ff0] font-semibold">
+              {part}
+            </span>
+          ) : (
+            <span key={i}>{part}</span>
+          )
+        )}
+      </div>
+    );
+  });
+}
+
+function ZoomHud() {
+  const { zoomIn, zoomOut } = useReactFlow();
+  const { zoom } = useViewport();
+
+  return (
+    <div className="absolute bottom-5 right-5 z-25 flex items-center bg-[#14161d] border border-white/[0.09] rounded-full p-1 gap-0.5 shadow-xl">
+      <button
+        type="button"
+        onClick={() => zoomOut({ duration: 200 })}
+        className="w-7 h-7 rounded-full flex items-center justify-center text-[#8a8b9a] hover:bg-white/[0.045] hover:text-[#e8e8ee] cursor-pointer"
+      >
+        −
+      </button>
+      <span className="font-mono text-[11px] text-[#8a8b9a] w-[42px] text-center select-none">
+        {Math.round(zoom * 100)}%
+      </span>
+      <button
+        type="button"
+        onClick={() => zoomIn({ duration: 200 })}
+        className="w-7 h-7 rounded-full flex items-center justify-center text-[#8a8b9a] hover:bg-white/[0.045] hover:text-[#e8e8ee] cursor-pointer"
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
 function CanvasInner() {
+  const router = useRouter();
   const {
     present: currentIR,
     nodes,
@@ -34,107 +94,138 @@ function CanvasInner() {
     applyAIPatch,
     undo,
     redo,
-    past,
-    future,
     compileArchitecture,
     isCompiling,
     dispatchManualAction,
     addChatMessage,
     chatHistory,
-    isDirty,
     compiledFiles,
     syncStatus,
     exportedRepoUrl,
     setExportedRepoUrl,
-    projectName
+    projectName,
+    isCopilotOpen,
+    setIsCopilotOpen,
+    closeInspector,
+    activeRoutineId,
+    setActiveRoutineId,
+    canvasMode,
+    setCanvasMode,
+    notes,
+    updateNote,
+    deleteNote,
+    toastMessage,
+    showToast,
   } = useArchitectureStore();
 
-  const { getNode, fitView } = useReactFlow();
+  const { fitView, setCenter, getNode } = useReactFlow();
 
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [editorModalMode, setEditorModalMode] = useState<'swagger' | 'code' | null>(null);
   const [isExporting, setIsExporting] = useState(false);
-  
-  // --- Layout State ---
-  const [isChatOpen, setIsChatOpen] = useState(true);
 
-  // --- Modal States ---
-  const [alertModal, setAlertModal] = useState<{ isOpen: boolean; message: string }>({ isOpen: false, message: "" });
+  // GitHub Export Modal State
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
-  const [repoName, setRepoName] = useState("");
-  const [githubToken, setGithubToken] = useState("");
-  const [commitMessage, setCommitMessage] = useState("");
+  const [repoName, setRepoName] = useState('');
+  const [githubToken, setGithubToken] = useState('');
+  const [commitMessage, setCommitMessage] = useState('');
 
-  // --- SQL Assistant States ---
-  const [sqlModal, setSqlModal] = useState<{ isOpen: boolean; entityId: string; entityName: string } | null>(null);
-  const [sqlPrompt, setSqlPrompt] = useState("");
+  // SQL Assistant Modal State
+  const [sqlModal, setSqlModal] = useState<{
+    isOpen: boolean;
+    entityName: string;
+    routineType: CustomSqlSnippet['type'];
+  } | null>(null);
+  const [sqlPrompt, setSqlPrompt] = useState('');
   const [isGeneratingSql, setIsGeneratingSql] = useState(false);
 
-  // Listen for the custom event from EntityNode to open the SQL Assistant
   useEffect(() => {
     const handleOpenSql = (e: any) => {
-      setSqlModal({ isOpen: true, entityId: e.detail.entityId, entityName: e.detail.entityName });
+      const defaultEntity = e.detail?.entityName || currentIR.entities[0]?.name || '';
+      const defaultType = e.detail?.defaultType || 'TRIGGER';
+      setSqlModal({
+        isOpen: true,
+        entityName: defaultEntity,
+        routineType: defaultType,
+      });
     };
     window.addEventListener('open-sql-assistant', handleOpenSql);
     return () => window.removeEventListener('open-sql-assistant', handleOpenSql);
-  }, []);
+  }, [currentIR.entities]);
 
-  const edges = useMemo(
-    () => ReactFlowAdapter.generateEdges(currentIR),
-    [currentIR],
-  );
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const active = document.activeElement;
+      if (
+        active &&
+        (active.tagName === 'INPUT' ||
+          active.tagName === 'SELECT' ||
+          active.tagName === 'TEXTAREA' ||
+          (active as HTMLElement).isContentEditable)
+      ) {
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (e.key === 'v') {
+        setCanvasMode('select');
+      } else if (e.key === 'h') {
+        setCanvasMode('pan');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo, setCanvasMode]);
+
+  const edges = useMemo(() => ReactFlowAdapter.generateEdges(currentIR), [currentIR]);
 
   const isValidConnection = useCallback(
     (connection: Connection) => {
       if (!connection.source || !connection.target) return false;
-
-      // Prevent self-loops on the exact same field
       if (
         connection.source === connection.target &&
         connection.sourceHandle === connection.targetHandle
       ) {
         return false;
       }
-
-      // Prevent duplicate edges
       return !edges.some(
         (e) =>
           e.source === connection.source &&
           e.target === connection.target &&
           e.sourceHandle === connection.sourceHandle &&
-          e.targetHandle === connection.targetHandle,
+          e.targetHandle === connection.targetHandle
       );
     },
-    [edges],
+    [edges]
   );
 
-  // Extracts field-level handle IDs to track exact column connections
   const onConnect = useCallback(
     (params: Connection) => {
       if (!params.source || !params.target) return;
 
-      const sourceField = params.sourceHandle?.replace("source-", "");
-      const targetField = params.targetHandle?.replace("target-", "");
+      const sourceField = params.sourceHandle?.replace('source-', '');
+      const targetField = params.targetHandle?.replace('target-', '');
 
-      // AUTO-FK SYNCHRONIZATION
       const sourceNode = nodes.find((n) => n.id === params.source);
       const targetNode = nodes.find((n) => n.id === params.target);
 
       const sourceFieldData = sourceNode?.data.entity.fields.find(
-        (f: any) => f.name === sourceField,
+        (f: any) => f.name === sourceField
       );
       const targetFieldData = targetNode?.data.entity.fields.find(
-        (f: any) => f.name === targetField,
+        (f: any) => f.name === targetField
       );
 
-      // If types mismatch, mutate the target field to match the source's data type
       if (
         sourceFieldData &&
         targetFieldData &&
         sourceFieldData.type !== targetFieldData.type
       ) {
         dispatchManualAction({
-          action: "UPDATE_FIELD",
+          action: 'UPDATE_FIELD',
           targetEntity: params.target,
           targetField: targetField!,
           payload: { type: sourceFieldData.type },
@@ -142,70 +233,102 @@ function CanvasInner() {
       }
 
       dispatchManualAction({
-        action: "ADD_RELATION",
+        action: 'ADD_RELATION',
         payload: {
           sourceEntity: params.source,
           targetEntity: params.target,
           sourceField,
           targetField,
-          type: "ONE_TO_MANY",
+          type: 'ONE_TO_MANY',
         },
       });
+      showToast('Relationship connected');
     },
-    [nodes, dispatchManualAction],
+    [nodes, dispatchManualAction, showToast]
   );
+
+  const handleAddTable = () => {
+    let idx = currentIR.entities.length + 1;
+    let tableName = `table_${idx}`;
+    while (currentIR.entities.some((e) => e.name === tableName)) {
+      idx++;
+      tableName = `table_${idx}`;
+    }
+
+    dispatchManualAction({
+      action: 'ADD_ENTITY',
+      payload: {
+        name: tableName,
+        fields: [
+          { name: 'id', type: 'uuid', nullable: false, unique: true, isPrimaryKey: true },
+          { name: 'created_at', type: 'datetime', nullable: false, unique: false },
+        ],
+      },
+    });
+    showToast('New table added — describe its fields to Copilot to fill it in');
+  };
 
   const handleAISubmit = useCallback(
     async (promptText: string) => {
       if (!promptText.trim() || isGenerating) return;
 
       setIsGenerating(true);
-      addChatMessage({ role: "user", content: promptText });
+      addChatMessage({ role: 'user', content: promptText });
 
       try {
         const selectedNode = nodes.find((n) => n.selected);
-        const contextMap = ContextOrchestrator.buildAIPayload(currentIR, promptText, selectedNode?.id);
+        const contextMap = ContextOrchestrator.buildAIPayload(
+          currentIR,
+          promptText,
+          selectedNode?.id
+        );
 
-        const response = await fetch("/api/v1/ai/generate", {
-          method: "POST",
+        const response = await fetch('/api/v1/ai/generate', {
+          method: 'POST',
           headers: {
-            "Content-Type": "application/json",
-            Authorization: "Bearer development-token",
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer development-token',
           },
-          body: JSON.stringify({ prompt: promptText, contextMap, isVisionTask: false }),
+          body: JSON.stringify({
+            prompt: promptText,
+            contextMap,
+            isVisionTask: false,
+          }),
         });
 
         const data = await response.json();
-
         if (!response.ok) {
           throw new Error(data.error || `Gateway Error: ${response.statusText}`);
         }
 
-        // The backend guarantees this data is clean, validated, and ready to apply
-        addChatMessage({ role: "ai", content: data.reasoning });
+        addChatMessage({ role: 'ai', content: data.reasoning });
         const newIR = ShadowGraph.simulateAndValidate(currentIR, data.actions);
         applyAIPatch(newIR);
 
-        setTimeout(() => fitView({ padding: 0.2, duration: 800 }), 100);
-
+        setTimeout(() => fitView({ padding: 0.2, duration: 600 }), 100);
       } catch (err: any) {
-        // --- SECURE UI ERROR BOUNDARY ---
-        console.error("[Architect Error]:", err);
+        console.error('[Architect Error]:', err);
+        let safeMessage =
+          'I encountered an internal conflict while processing that architecture. Could you try rephrasing?';
 
-        let safeMessage = "I encountered an internal conflict while processing that architecture. Could you try rephrasing?";
-
-        if (err.message.includes("Failed to generate a valid architecture")) {
-           safeMessage = "I had trouble mapping that exact request to the strict database schema, even after self-correcting. Let's try adding those entities one at a time.";
-        } else if (err.message.includes("fetch") || err.message.includes("Network") || err.message.includes("429")) {
-           safeMessage = "The AI Gateway is experiencing heavy load. Please wait a moment and try again.";
+        if (err.message.includes('Failed to generate a valid architecture')) {
+          safeMessage =
+            "I had trouble mapping that exact request to the strict database schema. Let's try adding those entities one at a time.";
+        } else if (
+          err.message.includes('fetch') ||
+          err.message.includes('Network') ||
+          err.message.includes('429')
+        ) {
+          safeMessage =
+            'The AI Gateway is experiencing heavy load. Please wait a moment and try again.';
         }
 
-        addChatMessage({ role: "ai", content: safeMessage });
+        addChatMessage({ role: 'warn', content: safeMessage });
       } finally {
         setIsGenerating(false);
       }
     },
-    [isGenerating, nodes, currentIR, applyAIPatch, addChatMessage, fitView],
+    [isGenerating, nodes, currentIR, applyAIPatch, addChatMessage, fitView]
   );
 
   const handleGenerateSql = async () => {
@@ -213,403 +336,671 @@ function CanvasInner() {
     setIsGeneratingSql(true);
 
     try {
-      // Find the exact schema of the target entity to feed to the LLM
-      const targetEntity = currentIR.entities.find(e => e.name === sqlModal.entityName);
+      const targetEntity = currentIR.entities.find((e) => e.name === sqlModal.entityName);
 
-      const response = await fetch("/api/v1/ai/sql", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": "Bearer development-token" },
-        body: JSON.stringify({ 
-          prompt: sqlPrompt, 
-          targetEntitySchema: targetEntity 
+      const response = await fetch('/api/v1/ai/sql', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer development-token',
+        },
+        body: JSON.stringify({
+          prompt: `[${sqlModal.routineType}] ${sqlPrompt}`,
+          targetEntitySchema: targetEntity,
         }),
       });
 
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Failed to generate SQL");
+      if (!response.ok) throw new Error(data.error || 'Failed to generate SQL');
 
-      // Save the generated SQL to the AST
+      const prefix =
+        sqlModal.routineType === 'TRIGGER'
+          ? 'trg'
+          : sqlModal.routineType === 'STORED_PROCEDURE'
+          ? 'sp'
+          : 'fn';
+      const baseSlug = (sqlModal.entityName || 'schema').toLowerCase();
+      const newId = crypto.randomUUID();
+
       dispatchManualAction({
-        action: 'ADD_CUSTOM_SQL' as any,
+        action: 'ADD_CUSTOM_SQL',
         payload: {
-          id: crypto.randomUUID(),
-          name: `trigger_${sqlModal.entityName.toLowerCase()}_${Date.now()}`,
-          targetEntity: sqlModal.entityName,
-          type: "TRIGGER",
+          id: newId,
+          name: `${prefix}_${baseSlug}_${(currentIR.customSql?.length || 0) + 1}`,
+          targetEntity: sqlModal.entityName || undefined,
+          type: sqlModal.routineType,
           sql: data.sql,
-          prompt: sqlPrompt 
-        }
+          prompt: sqlPrompt,
+        },
       });
 
-      addChatMessage({ role: "ai", content: `Successfully generated and attached a custom SQL trigger for ${sqlModal.entityName}.` });
+      addChatMessage({
+        role: 'ai',
+        content: `Generated ${sqlModal.routineType.toLowerCase()} on ${
+          sqlModal.entityName || 'database'
+        }.`,
+      });
       setSqlModal(null);
-      setSqlPrompt("");
-
+      setSqlPrompt('');
+      setActiveRoutineId(newId);
+      showToast('SQL routine generated');
     } catch (err: any) {
-      console.error("SQL Generation Failed:", err);
-      addChatMessage({ role: "ai", content: `Failed to generate SQL: ${err.message}` });
+      console.error('SQL Generation Failed:', err);
+      showToast(`Failed to generate SQL: ${err.message}`);
     } finally {
       setIsGeneratingSql(false);
     }
   };
 
-  const handleCompile = async () => {
-    setIsEditorOpen(true);
-    await compileArchitecture();
-  };
-
-  const handleGitHubExportClick = () => {
+  const handleGitHubExportClick = async () => {
     if (!compiledFiles || Object.keys(compiledFiles).length === 0) {
-      setAlertModal({ isOpen: true, message: "Please generate code first before exporting." });
-      return;
+      await compileArchitecture();
     }
 
     if (exportedRepoUrl) {
-      // Extract repo name from URL
       const urlParts = exportedRepoUrl.split('/');
       setRepoName(urlParts[urlParts.length - 1]);
-      
-      const recentPrompt = chatHistory.filter(m => m.role === 'user').pop()?.content || '';
-      if (recentPrompt) setCommitMessage(`feat: ${recentPrompt.slice(0, 50)}...`);
+      const recentPrompt = chatHistory.filter((m) => m.role === 'user').pop()?.content || '';
+      if (recentPrompt) setCommitMessage(`feat: ${recentPrompt.slice(0, 50)}`);
     } else {
-      // Slugify projectName
-      const slugifiedName = (projectName || "untitled-architecture")
+      const slugifiedName = (projectName || 'acme-commerce')
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/(^-|-$)/g, '');
       setRepoName(`${slugifiedName}-api`);
     }
-    
+
     setIsExportModalOpen(true);
   };
 
   const handleGitHubExportConfirm = async () => {
     if (!repoName || !githubToken) return;
     setIsExportModalOpen(false);
-
     setIsExporting(true);
-    addChatMessage({ 
-      role: 'user', 
-      content: exportedRepoUrl 
-        ? `Committing changes to ${repoName}...` 
-        : `Initiating parallel export to github.com/.../${repoName}` 
-    });
 
     try {
+      const latestFiles = useArchitectureStore.getState().compiledFiles;
       const response = await fetch('/api/v1/export/github', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          repoName, 
-          files: compiledFiles, 
-          token: githubToken, 
-          commitMessage: commitMessage || (exportedRepoUrl ? "feat: update architecture schema" : "feat: initial architecture generation") 
+        body: JSON.stringify({
+          repoName,
+          files: latestFiles,
+          token: githubToken,
+          commitMessage:
+            commitMessage ||
+            (exportedRepoUrl
+              ? 'feat: update architecture schema'
+              : 'feat: initial architecture generation'),
         }),
       });
 
       const data = await response.json();
-
       if (!response.ok) throw new Error(data.error || 'Export failed');
 
       setExportedRepoUrl(data.url);
-
-      addChatMessage({ 
-        role: 'ai', 
-        content: exportedRepoUrl 
-          ? `Success! Changes committed to repository. View it here: ${data.url}` 
-          : `Success! Repository created and populated atomically. View it here: ${data.url}` 
-      });
+      showToast(
+        `Exported ${currentIR.entities.length} tables to ${data.url.replace('https://', '')}`
+      );
       window.open(data.url, '_blank');
-
     } catch (error: any) {
-      addChatMessage({ role: 'ai', content: `Export Error: ${error.message}` });
+      showToast(`Export Error: ${error.message}`);
     } finally {
       setIsExporting(false);
-      setGithubToken(""); // Clear token after use for security
-      setCommitMessage(""); // Reset commit message
+      setGithubToken('');
+      setCommitMessage('');
     }
   };
 
-  // Pre-calculate active triggers for the modal
-  const activeTriggers = sqlModal 
-    ? (currentIR.customSql?.filter(sql => sql.targetEntity === sqlModal.entityName) || [])
-    : [];
+  const activeRoutine = activeRoutineId
+    ? currentIR.customSql?.find((r) => r.id === activeRoutineId) || null
+    : null;
 
   return (
-    <div className="w-screen h-screen bg-[#0A0A0A] font-sans selection:bg-indigo-500/30 overflow-hidden flex relative">
-      
-      {/* --- Main Canvas Area --- */}
-      <div className="flex-1 h-full relative">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onConnect={onConnect}
-          isValidConnection={isValidConnection}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          fitView
-          proOptions={{ hideAttribution: true }}
-          minZoom={0.1}
-          maxZoom={2}
-          className="bg-[#0A0A0A]"
+    <div className="flex flex-col h-screen w-screen bg-[#0b0c10] text-[#e8e8ee] overflow-hidden select-none">
+      {/* ================= TOPBAR ================= */}
+      <header className="relative z-40 h-[52px] flex items-center px-3.5 gap-4 bg-[#14161d] border-b border-white/[0.09] shrink-0">
+        <div
+          onClick={() => router.push('/dashboard')}
+          className="flex items-center gap-2 font-semibold text-[15px] tracking-[0.2px] cursor-pointer"
         >
-          <Background gap={24} size={1} color="#ffffff05" />
+          <span className="w-5 h-5 flex-none">
+            <svg viewBox="0 0 24 24" fill="none" className="w-full h-full">
+              <path d="M4 12 L12 4 L20 12 L12 20 Z" stroke="#e08a3c" strokeWidth="1.6" />
+              <circle cx="12" cy="12" r="2.3" fill="#e08a3c" />
+            </svg>
+          </span>
+          Nexus
+        </div>
 
-          <Panel position="top-left" className="m-6">
-            <div className="flex gap-2 bg-[#111111] p-1 rounded-md border border-white/10 shadow-2xl">
-              <button
-                onClick={undo}
-                disabled={past.length === 0}
-                className="px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white disabled:opacity-30 transition-colors"
+        {/* Breadcrumbs & Live Cloud Sync Indicator */}
+        <div className="hidden sm:flex items-center gap-1.5 text-[12.5px] text-[#8a8b9a] font-mono">
+          <span
+            onClick={() => router.push('/dashboard')}
+            className="hover:text-[#e8e8ee] cursor-pointer transition-colors"
+          >
+            Workspaces
+          </span>
+          <span className="text-[#565766]">/</span>
+          <span className="text-[#e8e8ee]">{projectName}</span>
+          <span className="text-[#565766]">/</span>
+          <span>schema.graph</span>
+          <span className="text-[#565766]">/</span>
+
+          {syncStatus === 'synced' && (
+            <span className="text-[#8fbf6b] flex items-center gap-[5px]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#8fbf6b] shadow-[0_0_0_3px_rgba(143,191,107,0.15)]" />
+              synced
+            </span>
+          )}
+          {syncStatus === 'syncing' && (
+            <span className="text-[#e08a3c] flex items-center gap-[5px]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#e08a3c] animate-pulse" />
+              saving…
+            </span>
+          )}
+          {syncStatus === 'error' && (
+            <span className="text-[#e0708f] flex items-center gap-[5px]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#e0708f]" />
+              sync error
+            </span>
+          )}
+        </div>
+
+        <div className="flex-1" />
+
+        {/* Swagger Playground Button */}
+        <button
+          type="button"
+          onClick={() => setEditorModalMode('swagger')}
+          className="px-[13px] py-[7px] rounded-[7px] border border-white/[0.09] bg-white/[0.045] hover:bg-white/[0.07] hover:border-white/[0.22] text-[13px] flex items-center gap-[7px] transition-all cursor-pointer"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            className="w-3.5 h-3.5"
+          >
+            <path d="M4 6h16M4 12h16M4 18h10" />
+          </svg>
+          Swagger
+        </button>
+
+        {/* Copilot Button */}
+        <button
+          type="button"
+          onClick={() => setIsCopilotOpen(!isCopilotOpen)}
+          className={`px-[13px] py-[7px] rounded-[7px] border text-[13px] flex items-center gap-[7px] transition-all cursor-pointer ${
+            isCopilotOpen
+              ? 'border-[#8b7ff0]/50 bg-[#8b7ff0]/15 text-[#e8e8ee]'
+              : 'border-white/[0.09] bg-white/[0.045] hover:bg-white/[0.07] hover:border-white/[0.22]'
+          }`}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            className="w-3.5 h-3.5"
+          >
+            <path d="M12 3v3M12 18v3M3 12h3M18 12h3M6 6l2 2M16 16l2 2M18 6l-2 2M8 16l-2 2" />
+            <circle cx="12" cy="12" r="3.5" />
+          </svg>
+          Copilot
+        </button>
+
+        {/* Export to GitHub Primary Button */}
+        <button
+          type="button"
+          onClick={handleGitHubExportClick}
+          disabled={isExporting || isCompiling}
+          className="px-[13px] py-[7px] rounded-[7px] text-[13px] font-semibold text-[#1a1206] bg-gradient-to-br from-[#e08a3c] to-[#c9692a] hover:brightness-110 disabled:opacity-50 flex items-center gap-[7px] transition-all cursor-pointer"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5">
+            <path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.46-1.16-1.11-1.47-1.11-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.52 2.34 1.08 2.91.83.09-.65.35-1.08.63-1.33-2.22-.25-4.56-1.11-4.56-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.3 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.35 4.68-4.58 4.93.36.31.68.92.68 1.85v2.74c0 .26.18.58.69.48A10 10 0 0 0 12 2Z" />
+          </svg>
+          {isExporting
+            ? 'Pushing…'
+            : exportedRepoUrl
+            ? 'Commit to GitHub'
+            : 'Export to GitHub'}
+        </button>
+      </header>
+
+      {/* ================= STUDIO BODY ================= */}
+      <div className="relative flex-1 flex overflow-hidden w-full">
+        {/* Left Collapsible Schema Explorer */}
+        <SchemaExplorer />
+
+        {/* Center Canvas / SQL Routine Code View (strictly overflow-hidden) */}
+        <div className="relative flex-1 min-w-0 h-full overflow-hidden bg-[#0b0c10]">
+          {!activeRoutine ? (
+            <>
+              {/* 12-Button Floating Left Rail & Search Overlay */}
+              <Toolbar />
+
+              {/* React Flow Graph */}
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onConnect={onConnect}
+                isValidConnection={isValidConnection}
+                onPaneClick={() => closeInspector()}
+                nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
+                panOnDrag={canvasMode === 'pan' ? true : [1, 2]}
+                nodesDraggable={canvasMode === 'select'}
+                elementsSelectable={canvasMode === 'select'}
+                fitView
+                proOptions={{ hideAttribution: true }}
+                minZoom={0.35}
+                maxZoom={1.8}
+                className="bg-[#0b0c10]"
               >
-                Undo (Ctrl+Z)
-              </button>
-              <div className="w-px bg-white/10" />
+                <Background
+                  variant={BackgroundVariant.Dots}
+                  gap={26}
+                  size={1.4}
+                  color="rgba(255, 255, 255, 0.09)"
+                />
+              </ReactFlow>
+
+              {/* Draggable Sticky Notes Layer (Pure Inline Tailwind) */}
+              {notes.map((note) => (
+                <div
+                  key={note.id}
+                  style={{ left: note.x, top: note.y }}
+                  className="group/note absolute w-[180px] min-h-[104px] bg-[#e0d199] text-[#3a3320] rounded-lg shadow-[0_14px_28px_-14px_rgba(0,0,0,0.5)] text-[12.5px] leading-[1.45] z-20"
+                >
+                  <div
+                    onPointerDown={(e) => {
+                      if ((e.target as HTMLElement).closest('button')) return;
+                      e.stopPropagation();
+                      const startX = e.clientX;
+                      const startY = e.clientY;
+                      const origX = note.x;
+                      const origY = note.y;
+                      const move = (ev: PointerEvent) => {
+                        updateNote(note.id, {
+                          x: origX + (ev.clientX - startX),
+                          y: origY + (ev.clientY - startY),
+                        });
+                      };
+                      const up = () => {
+                        window.removeEventListener('pointermove', move);
+                        window.removeEventListener('pointerup', up);
+                      };
+                      window.addEventListener('pointermove', move);
+                      window.addEventListener('pointerup', up);
+                    }}
+                    className="h-[18px] cursor-grab active:cursor-grabbing flex items-center relative"
+                  >
+                    <span className="flex-1 flex items-center justify-center gap-[3px]">
+                      <span className="w-[3px] h-[3px] rounded-full bg-[#3a3320]/40" />
+                      <span className="w-[3px] h-[3px] rounded-full bg-[#3a3320]/40" />
+                      <span className="w-[3px] h-[3px] rounded-full bg-[#3a3320]/40" />
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => deleteNote(note.id)}
+                      className="absolute right-1.5 top-[1px] w-4 h-4 rounded-[5px] text-[#3a3320] opacity-0 group-hover/note:opacity-60 hover:!opacity-100 hover:bg-[#3a3320]/12 flex items-center justify-center transition-opacity cursor-pointer"
+                      title="Delete note"
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        className="w-[11px] h-[11px]"
+                      >
+                        <path d="M6 6l12 12M18 6L6 18" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div
+                    contentEditable
+                    suppressContentEditableWarning
+                    spellCheck={false}
+                    onBlur={(e) =>
+                      updateNote(note.id, { text: e.currentTarget.textContent || '' })
+                    }
+                    className="px-3 pb-3 outline-none break-words select-text"
+                  >
+                    {note.text}
+                  </div>
+                </div>
+              ))}
+
+              {/* Bottom-Center "+ Add table" Pill */}
               <button
-                onClick={redo}
-                disabled={future.length === 0}
-                className="px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white disabled:opacity-30 transition-colors"
+                type="button"
+                onClick={handleAddTable}
+                className="absolute bottom-5 left-1/2 -translate-x-1/2 z-25 flex items-center gap-2 pl-3.5 pr-4 py-[9px] rounded-full bg-[#14161d] border border-white/[0.09] hover:border-[#e08a3c]/40 shadow-[0_10px_26px_-10px_rgba(0,0,0,0.6)] text-[13px] transition-colors cursor-pointer"
               >
-                Redo
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="#e08a3c"
+                  strokeWidth="1.8"
+                  className="w-[15px] h-[15px]"
+                >
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                Add table
               </button>
-            </div>
-          </Panel>
 
-          <Controls
-            className="bg-[#111111] border-white/10 fill-white/70"
-            showInteractive={false}
-          />
+              {/* Bottom-Right Zoom HUD */}
+              <ZoomHud />
+            </>
+          ) : (
+            /* ================= SQL ROUTINE CODE VIEW ================= */
+            <div className="absolute inset-0 z-28 flex flex-col bg-[#0b0c10] px-[30px] py-[22px]">
+              <div className="flex items-center gap-3 mb-4">
+                <button
+                  type="button"
+                  onClick={() => setActiveRoutineId(null)}
+                  className="px-[13px] py-[7px] rounded-[7px] border border-white/[0.09] bg-white/[0.045] hover:bg-white/[0.07] text-[13px] flex items-center gap-2 cursor-pointer"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    className="w-3.5 h-3.5"
+                  >
+                    <path d="M15 18l-6-6 6-6" />
+                  </svg>
+                  Schema Visualizer
+                </button>
 
-          <Panel position="top-right" className="m-6 flex flex-col items-end gap-3 z-50">
-            {isDirty && (
-              <div className="flex items-center gap-2 px-2.5 py-1.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] font-mono tracking-widest uppercase shadow-lg backdrop-blur-md">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                Uncompiled Changes
+                <span
+                  className={`text-[10px] font-mono px-[9px] py-[3px] rounded-full uppercase tracking-[0.4px] ${
+                    activeRoutine.type === 'TRIGGER'
+                      ? 'text-[#8b7ff0] bg-[#8b7ff0]/14'
+                      : activeRoutine.type === 'STORED_PROCEDURE'
+                      ? 'text-[#e08a3c] bg-[#e08a3c]/14'
+                      : 'text-[#3fc6d8] bg-[#3fc6d8]/14'
+                  }`}
+                >
+                  {activeRoutine.type === 'STORED_PROCEDURE'
+                    ? 'procedure'
+                    : activeRoutine.type.toLowerCase()}
+                </span>
+
+                <span className="font-mono text-[15px] font-semibold">
+                  {activeRoutine.name}
+                </span>
+
+                <div className="flex-1" />
+
+                {activeRoutine.targetEntity && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = activeRoutine.targetEntity!;
+                      setActiveRoutineId(null);
+                      setTimeout(() => {
+                        const node = getNode(target);
+                        if (node) {
+                          setCenter(node.position.x + 120, node.position.y + 100, {
+                            zoom: 1.05,
+                            duration: 400,
+                          });
+                        }
+                      }, 60);
+                    }}
+                    className="px-[13px] py-[7px] rounded-[7px] border border-white/[0.09] bg-white/[0.045] hover:bg-white/[0.07] text-[13px] flex items-center gap-2 cursor-pointer"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      className="w-3.5 h-3.5"
+                    >
+                      <rect x="4" y="4" width="16" height="16" rx="2.5" />
+                      <path d="M4 10h16" />
+                    </svg>
+                    View table
+                  </button>
+                )}
               </div>
-            )}
 
-            <div className="flex items-center gap-2">
-              <button 
-                onClick={() => setIsChatOpen(!isChatOpen)}
-                className="px-3 py-2 bg-[#111111] border border-white/20 text-white hover:bg-white/10 rounded-md shadow-2xl text-xs font-medium transition-colors"
-              >
-                {isChatOpen ? 'Close Chat' : 'Open Chat'}
-              </button>
+              {/* Metadata Chips */}
+              <div className="flex gap-2 mb-4 flex-wrap">
+                <span className="text-[11px] font-mono text-[#8a8b9a] bg-white/[0.045] border border-white/[0.09] px-2.5 py-[5px] rounded-lg">
+                  Language: plpgsql
+                </span>
+                {activeRoutine.type === 'TRIGGER' && (
+                  <span className="text-[11px] font-mono text-[#8a8b9a] bg-white/[0.045] border border-white/[0.09] px-2.5 py-[5px] rounded-lg">
+                    Event: AFTER UPDATE
+                  </span>
+                )}
+                <span className="text-[11px] font-mono text-[#8a8b9a] bg-white/[0.045] border border-white/[0.09] px-2.5 py-[5px] rounded-lg">
+                  Table: {activeRoutine.targetEntity || '—'}
+                </span>
+              </div>
 
-              <button 
-                onClick={handleGitHubExportClick}
-                disabled={isCompiling || isExporting || !compiledFiles || Object.keys(compiledFiles).length === 0}
-                className={`
-                  px-4 py-2 text-xs font-medium rounded-md shadow-2xl transition-all border
-                  ${(!compiledFiles || Object.keys(compiledFiles).length === 0)
-                    ? 'bg-white/5 border-white/10 text-white/30 cursor-not-allowed'
-                    : isExporting
-                      ? 'bg-[#111111] border-white/10 text-white/40 cursor-wait'
-                      : 'bg-[#111111] border-white/20 text-white hover:bg-white/10'}
-                `}
-              >
-                {isExporting ? 'Pushing to Git...' : exportedRepoUrl ? 'Commit Changes' : 'Export to GitHub'}
-              </button>
-
-              <button
-                onClick={handleCompile}
-                disabled={isCompiling}
-                className={`
-                  px-4 py-2 text-xs font-medium rounded-md shadow-2xl transition-all border
-                  ${
-                    isCompiling
-                      ? "bg-[#111111] border-white/10 text-white/40 cursor-wait"
-                      : "bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-500 hover:shadow-indigo-500/20"
-                  }
-                `}
-              >
-                {isCompiling ? "Compiling AST..." : "Generate Code"}
-              </button>
+              {/* Highlighted SQL Code Box */}
+              <div className="flex-1 overflow-auto border border-white/[0.09] rounded-xl bg-[#101219]">
+                <pre className="m-0 p-5 font-mono text-[12.5px] leading-[1.7] text-[#e8e8ee] whitespace-pre-wrap">
+                  {highlightSQLToJSX(activeRoutine.sql)}
+                </pre>
+              </div>
             </div>
-          </Panel>
+          )}
 
-          <Panel position="top-left" className="m-6 mt-24">
-            <Toolbar />
-          </Panel>
-
-          {/* --- Sync Status Indicator --- */}
-          <Panel position="bottom-left" className="m-6 z-50">
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-[#111111]/80 backdrop-blur-md border border-white/5 rounded-full shadow-lg">
-              {syncStatus === 'synced' && (
-                <>
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
-                  <span className="text-[10px] font-mono text-white/50 uppercase tracking-wider">Cloud Synced</span>
-                </>
-              )}
-              {syncStatus === 'syncing' && (
-                <>
-                  <div className="w-2 h-2 rounded-full border border-indigo-400 border-t-transparent animate-spin" />
-                  <span className="text-[10px] font-mono text-indigo-400 uppercase tracking-wider">Saving...</span>
-                </>
-              )}
-              {syncStatus === 'error' && (
-                <>
-                  <div className="w-2 h-2 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]" />
-                  <span className="text-[10px] font-mono text-rose-400 uppercase tracking-wider">Sync Failed</span>
-                </>
-              )}
-            </div>
-          </Panel>
-        </ReactFlow>
-      </div>
-
-      {/* --- Collapsible Sidebar Area --- */}
-      <div 
-        className={`h-full border-l border-white/10 bg-[#0A0A0A] transition-all duration-300 ease-in-out relative z-40 ${
-          isChatOpen ? 'w-[400px] opacity-100' : 'w-0 opacity-0 overflow-hidden border-none'
-        }`}
-      >
-        <div className="w-[400px] h-full flex flex-col">
+          {/* Right Slide-Out Copilot & Field Inspector Panels */}
           <ChatConsole onSumbit={handleAISubmit} isThinking={isGenerating} />
         </div>
       </div>
 
-      {isEditorOpen && <EditorPanel onClose={() => setIsEditorOpen(false)} />}
+      {/* ================= SWAGGER / CODE COMPILER MODAL ================= */}
+      {editorModalMode && (
+        <EditorPanel
+          mode={editorModalMode}
+          onClose={() => setEditorModalMode(null)}
+          onSwitchMode={(m) => setEditorModalMode(m)}
+        />
+      )}
 
-      {/* --- AI Trigger Assistant Modal --- */}
+      {/* ================= AI SQL ROUTINE GENERATOR MODAL ================= */}
       {sqlModal?.isOpen && (
-        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-[#111111] border border-white/10 p-6 rounded-lg shadow-2xl max-w-lg w-full mx-4 flex flex-col gap-4">
-            <div>
-              <h3 className="text-white text-lg font-medium flex items-center gap-2">
-                <span className="text-indigo-400">⚡</span> AI Trigger Assistant
-              </h3>
-              <p className="text-white/50 text-xs mt-1">
-                Targeting: <span className="font-mono text-white/70">{sqlModal.entityName}</span>
-              </p>
+        <div
+          onClick={() => setSqlModal(null)}
+          className="fixed inset-0 bg-[#050508]/60 backdrop-blur-[3px] z-60 flex items-center justify-center"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-[min(480px,92vw)] bg-[#14161d] border border-white/[0.09] rounded-2xl shadow-2xl overflow-hidden"
+          >
+            <div className="px-[18px] py-4 border-b border-white/[0.09] flex items-center">
+              <b className="text-[14px]">AI PL/pgSQL Generator</b>
+              <span className="text-[11.5px] text-[#565766] ml-2 font-mono">
+                {sqlModal.entityName || 'global'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSqlModal(null)}
+                className="ml-auto w-[26px] h-[26px] rounded-full bg-white/[0.045] border border-white/[0.09] flex items-center justify-center text-[#8a8b9a] hover:text-[#e8e8ee] cursor-pointer"
+              >
+                ✕
+              </button>
             </div>
 
-            {/* List existing triggers and their prompts */}
-            {activeTriggers.length > 0 && (
-              <div className="max-h-40 overflow-y-auto space-y-3 mb-2 pr-2 custom-scrollbar">
-                {activeTriggers.map(snippet => (
-                  <div key={snippet.id} className="bg-white/5 border border-white/10 p-3 rounded-md">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <span className="text-emerald-400 text-xs">✓ Active</span>
-                      <span className="text-white/40 text-[10px] font-mono">{snippet.name}</span>
-                    </div>
-                    <p className="text-white/80 text-sm italic">"{snippet.prompt}"</p>
-                  </div>
-                ))}
+            <div className="p-[18px] space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] text-[#8a8b9a] mb-1.5">Routine Type</label>
+                  <select
+                    value={sqlModal.routineType}
+                    onChange={(e) =>
+                      setSqlModal({
+                        ...sqlModal,
+                        routineType: e.target.value as CustomSqlSnippet['type'],
+                      })
+                    }
+                    className="w-full bg-[#101219] border border-white/[0.09] rounded-lg px-2.5 py-2 text-[12.5px] font-mono text-[#e8e8ee] outline-none"
+                  >
+                    <option value="TRIGGER">Trigger</option>
+                    <option value="FUNCTION">Function</option>
+                    <option value="STORED_PROCEDURE">Procedure</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] text-[#8a8b9a] mb-1.5">Target Table</label>
+                  <select
+                    value={sqlModal.entityName}
+                    onChange={(e) =>
+                      setSqlModal({ ...sqlModal, entityName: e.target.value })
+                    }
+                    className="w-full bg-[#101219] border border-white/[0.09] rounded-lg px-2.5 py-2 text-[12.5px] font-mono text-[#e8e8ee] outline-none"
+                  >
+                    {currentIR.entities.map((ent) => (
+                      <option key={ent.name} value={ent.name}>
+                        {ent.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
-            )}
-            
-            <textarea
-              value={sqlPrompt}
-              onChange={(e) => setSqlPrompt(e.target.value)}
-              placeholder="e.g., Audit every soft-delete to an audit_logs table before update..."
-              className="w-full bg-[#0A0A0A] border border-white/10 rounded-md px-4 py-3 text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors h-32 resize-none"
-            />
-            
-            <div className="flex justify-end gap-3 mt-2">
-              <button
-                onClick={() => { setSqlModal(null); setSqlPrompt(""); }}
-                className="px-4 py-2 bg-transparent border border-white/10 hover:bg-white/5 text-white rounded-md text-sm transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleGenerateSql}
-                disabled={!sqlPrompt.trim() || isGeneratingSql}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md text-sm transition-colors flex items-center gap-2"
-              >
-                {isGeneratingSql ? (
-                  <><div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" /> Generating...</>
-                ) : (
-                  "Generate PL/pgSQL"
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* --- Alert Modal --- */}
-      {alertModal.isOpen && (
-        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-[#111111] border border-white/10 p-6 rounded-lg shadow-2xl max-w-sm w-full mx-4">
-            <h3 className="text-white text-lg font-medium mb-2">Notice</h3>
-            <p className="text-white/70 text-sm mb-6">{alertModal.message}</p>
-            <div className="flex justify-end">
-              <button
-                onClick={() => setAlertModal({ isOpen: false, message: "" })}
-                className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-md text-sm transition-colors"
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- Export Form Modal --- */}
-      {isExportModalOpen && (
-        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-[#111111] border border-white/10 p-6 rounded-lg shadow-2xl max-w-md w-full mx-4">
-            <h3 className="text-white text-lg font-medium mb-4">
-              {exportedRepoUrl ? "Commit to GitHub" : "Export to GitHub"}
-            </h3>
-            
-            <div className="space-y-4 mb-6">
               <div>
-                <label className="block text-white/70 text-xs mb-1.5 font-medium">Repository Name</label>
+                <label className="block text-[11px] text-[#8a8b9a] mb-1.5">
+                  Behavioral Description
+                </label>
+                <textarea
+                  value={sqlPrompt}
+                  onChange={(e) => setSqlPrompt(e.target.value)}
+                  placeholder="e.g. Log every order status change to an audit table after update…"
+                  className="w-full h-28 bg-[#101219] border border-white/[0.09] focus:border-[#8b7ff0]/50 rounded-lg p-3 text-[12.5px] text-[#e8e8ee] outline-none resize-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSqlModal(null)}
+                  className="px-3.5 py-2 rounded-[7px] border border-white/[0.09] bg-white/[0.045] text-[12.5px] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleGenerateSql}
+                  disabled={!sqlPrompt.trim() || isGeneratingSql}
+                  className="px-4 py-2 rounded-[7px] text-[12.5px] font-semibold text-[#1a1206] bg-gradient-to-br from-[#e08a3c] to-[#c9692a] disabled:opacity-50 cursor-pointer"
+                >
+                  {isGeneratingSql ? 'Generating PL/pgSQL…' : 'Generate Routine'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= GITHUB EXPORT MODAL ================= */}
+      {isExportModalOpen && (
+        <div
+          onClick={() => setIsExportModalOpen(false)}
+          className="fixed inset-0 bg-[#050508]/60 backdrop-blur-[3px] z-60 flex items-center justify-center"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-[min(440px,92vw)] bg-[#14161d] border border-white/[0.09] rounded-2xl shadow-2xl overflow-hidden"
+          >
+            <div className="px-[18px] py-4 border-b border-white/[0.09] flex items-center">
+              <b className="text-[14px]">
+                {exportedRepoUrl ? 'Commit to GitHub' : 'Export to GitHub'}
+              </b>
+              <span className="text-[11.5px] text-[#565766] ml-2 font-mono">git tree push</span>
+              <button
+                type="button"
+                onClick={() => setIsExportModalOpen(false)}
+                className="ml-auto w-[26px] h-[26px] rounded-full bg-white/[0.045] border border-white/[0.09] flex items-center justify-center text-[#8a8b9a] hover:text-[#e8e8ee] cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-[18px] space-y-3.5">
+              <div>
+                <label className="block text-[11px] text-[#8a8b9a] mb-1.5">Repository Name</label>
                 <input
                   type="text"
                   value={repoName}
-                  onChange={e => setRepoName(e.target.value)}
+                  onChange={(e) => setRepoName(e.target.value)}
                   disabled={!!exportedRepoUrl}
-                  className="w-full bg-[#0A0A0A] border border-white/10 rounded-md px-3 py-2.5 text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors disabled:opacity-50"
-                  placeholder="e.g. zero-dollar-generated-api"
+                  className="w-full bg-[#101219] border border-white/[0.09] focus:border-[#e08a3c]/50 rounded-lg px-3 py-2 text-[12.5px] font-mono text-[#e8e8ee] outline-none disabled:opacity-50"
                 />
               </div>
-              
+
               <div>
-                <label className="block text-white/70 text-xs mb-1.5 font-medium">Commit Message</label>
+                <label className="block text-[11px] text-[#8a8b9a] mb-1.5">Commit Message</label>
                 <input
                   type="text"
                   value={commitMessage}
-                  onChange={e => setCommitMessage(e.target.value)}
-                  placeholder={exportedRepoUrl ? "feat: update architecture schema" : "feat: initial architecture generation"}
-                  className="w-full bg-[#0A0A0A] border border-white/10 rounded-md px-3 py-2.5 text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                  onChange={(e) => setCommitMessage(e.target.value)}
+                  placeholder="feat: initial architecture generation"
+                  className="w-full bg-[#101219] border border-white/[0.09] focus:border-[#e08a3c]/50 rounded-lg px-3 py-2 text-[12.5px] font-mono text-[#e8e8ee] outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-white/70 text-xs mb-1.5 font-medium">GitHub Personal Access Token</label>
+                <label className="block text-[11px] text-[#8a8b9a] mb-1.5">
+                  GitHub Personal Access Token (repo scope)
+                </label>
                 <input
                   type="password"
                   value={githubToken}
-                  onChange={e => setGithubToken(e.target.value)}
-                  placeholder="Requires 'repo' scope"
-                  className="w-full bg-[#0A0A0A] border border-white/10 rounded-md px-3 py-2.5 text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                  onChange={(e) => setGithubToken(e.target.value)}
+                  placeholder="ghp_••••••••••••••••••••"
+                  className="w-full bg-[#101219] border border-white/[0.09] focus:border-[#e08a3c]/50 rounded-lg px-3 py-2 text-[12.5px] font-mono text-[#e8e8ee] outline-none"
                 />
               </div>
-            </div>
 
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => setIsExportModalOpen(false)}
-                className="px-4 py-2 bg-transparent border border-white/10 hover:bg-white/5 text-white rounded-md text-sm transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleGitHubExportConfirm}
-                disabled={!repoName || !githubToken}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md text-sm transition-colors"
-              >
-                {exportedRepoUrl ? "Confirm Commit" : "Confirm Export"}
-              </button>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsExportModalOpen(false)}
+                  className="px-3.5 py-2 rounded-[7px] border border-white/[0.09] bg-white/[0.045] text-[12.5px] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleGitHubExportConfirm}
+                  disabled={!repoName || !githubToken}
+                  className="px-4 py-2 rounded-[7px] text-[12.5px] font-semibold text-[#1a1206] bg-gradient-to-br from-[#e08a3c] to-[#c9692a] disabled:opacity-50 cursor-pointer"
+                >
+                  {exportedRepoUrl ? 'Confirm Commit' : 'Confirm Export'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* ================= NEXUS TOAST NOTIFICATION ================= */}
+      <div
+        className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-80 bg-[#14161d] border border-[#e08a3c]/35 rounded-[10px] px-4 py-[11px] text-[12.5px] flex items-center gap-[9px] shadow-[0_20px_45px_-15px_rgba(0,0,0,0.6)] transition-all duration-200 pointer-events-none ${
+          toastMessage ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-5'
+        }`}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          className="w-[15px] h-[15px] text-[#8fbf6b] flex-none"
+        >
+          <path d="M20 6L9 17l-5-5" />
+        </svg>
+        <span>{toastMessage}</span>
+      </div>
     </div>
   );
 }

@@ -1,160 +1,187 @@
 import { memo, useState } from 'react';
-import { BaseEdge, EdgeLabelRenderer, EdgeProps, getSmoothStepPath } from 'reactflow';
+import { EdgeLabelRenderer, EdgeProps, getBezierPath } from 'reactflow';
 import { useArchitectureStore } from '../../store/architectureStore';
+import type { UIEdgeData } from '../../lib/reactFlowAdapter';
 import type { Relation } from '@zero-dollar/ir-core';
 
 const CARDINALITY_OPTIONS = [
-  { value: 'ONE_TO_ONE', label: '1 : 1' },
-  { value: 'ONE_TO_MANY', label: '1 : N' },
-  { value: 'MANY_TO_MANY', label: 'M : N' },
+  { value: 'ONE_TO_ONE', label: '1:1' },
+  { value: 'ONE_TO_MANY', label: '1:N' },
+  { value: 'MANY_TO_MANY', label: 'M:N' },
 ] as const;
 
-export const RelationEdge = memo(({
-  id,
-  sourceX,
-  sourceY,
-  targetX,
-  targetY,
-  sourcePosition,
-  targetPosition,
-  style,
-  markerEnd,
-  data,
-}: EdgeProps<{ relation: Relation }>) => {
-  const dispatchManualAction = useArchitectureStore(s => s.dispatchManualAction);
-  const [dropdownOpen, setDropdownOpen] = useState(false);
+export const RelationEdge = memo(
+  ({
+    id,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+    selected,
+    data,
+  }: EdgeProps<UIEdgeData>) => {
+    const dispatchManualAction = useArchitectureStore((s) => s.dispatchManualAction);
+    const showToast = useArchitectureStore((s) => s.showToast);
+    const [hovered, setHovered] = useState(false);
 
-  const [edgePath, labelX, labelY] = getSmoothStepPath({
-    sourceX, sourceY, sourcePosition,
-    targetX, targetY, targetPosition,
-  });
-
-  const relation = data?.relation;
-  if (!relation) return null;
-
-  const handleCardinalityChange = (type: Relation['type']) => {
-    dispatchManualAction({
-      action: "UPDATE_RELATION",
-      sourceEntity: relation.sourceEntity,
-      targetEntity: relation.targetEntity,
-      sourceField: relation.sourceField, 
-      targetField: relation.targetField, 
-      payload: { type }
+    const [edgePath, labelX, labelY] = getBezierPath({
+      sourceX,
+      sourceY,
+      sourcePosition,
+      targetX,
+      targetY,
+      targetPosition,
     });
-    setDropdownOpen(false);
-  };
 
-  const handleOnDeleteChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    dispatchManualAction({
-      action: "UPDATE_RELATION",
-      sourceEntity: relation.sourceEntity,
-      targetEntity: relation.targetEntity,
-      sourceField: relation.sourceField,
-      targetField: relation.targetField,
-      payload: { onDelete: e.target.value as Relation['onDelete'] }
-    });
-  };
+    const relation = data?.relation;
+    const strokeColor = data?.colorHex || '#8b7ff0';
 
-  const handleDelete = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    dispatchManualAction({
-      action: "REMOVE_RELATION",
-      sourceEntity: relation.sourceEntity,
-      targetEntity: relation.targetEntity,
-      sourceField: relation.sourceField, 
-      targetField: relation.targetField  
-    });
-  };
+    if (!relation) return null;
 
-  const currentLabel = CARDINALITY_OPTIONS.find(o => o.value === relation.type)?.label || '1 : 1';
+    const handleCardinalityChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+      dispatchManualAction({
+        action: 'UPDATE_RELATION',
+        sourceEntity: relation.sourceEntity,
+        targetEntity: relation.targetEntity,
+        sourceField: relation.sourceField,
+        targetField: relation.targetField,
+        payload: { type: e.target.value as Relation['type'] },
+      });
+    };
 
-  return (
-    <>
-      {/* Explicitly adding Tailwind stroke classes ensures the line is always visible */}
-      <BaseEdge 
-        id={id}
-        path={edgePath} 
-        markerEnd={markerEnd} 
-        style={{
-          ...style,
-          stroke: style?.stroke ?? 'rgba(255, 255, 255, 0.2)',
-          strokeWidth: style?.strokeWidth ?? 2,
-        }}
-      />
-      
-      <EdgeLabelRenderer>
-        <div
-          style={{
-            position: 'absolute',
-            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-            pointerEvents: 'all',
-          }}
-          className="nodrag nopan flex items-center gap-1.5"
-          onMouseDown={(e) => e.stopPropagation()}
+    const handleOnDeleteChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+      dispatchManualAction({
+        action: 'UPDATE_RELATION',
+        sourceEntity: relation.sourceEntity,
+        targetEntity: relation.targetEntity,
+        sourceField: relation.sourceField,
+        targetField: relation.targetField,
+        payload: { onDelete: e.target.value as Relation['onDelete'] },
+      });
+    };
+
+    const handleDelete = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      dispatchManualAction({
+        action: 'REMOVE_RELATION',
+        sourceEntity: relation.sourceEntity,
+        targetEntity: relation.targetEntity,
+        sourceField: relation.sourceField,
+        targetField: relation.targetField,
+      });
+      showToast('Relationship removed');
+    };
+
+    const showControls = hovered || selected;
+
+    return (
+      <>
+        <g
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          className="cursor-pointer"
         >
-          {/* Fully Custom Dropdown for Cardinality */}
-          <div className="relative flex items-center">
-            {dropdownOpen && (
-              <div className="fixed inset-0 z-40" onClick={() => setDropdownOpen(false)} />
-            )}
-            
-            <button
-              onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="relative z-10 flex items-center gap-2 bg-[#111111] hover:bg-[#18181b] text-indigo-300 font-mono text-[10px] font-bold px-2.5 py-1 rounded-md border border-indigo-500/30 shadow-lg outline-none cursor-pointer transition-all"
+          {/* Invisible wider hit area for smooth hovering */}
+          <path d={edgePath} fill="none" stroke="transparent" strokeWidth={18} />
+
+          {/* Outer Soft Glow */}
+          <path
+            d={edgePath}
+            fill="none"
+            stroke={strokeColor}
+            strokeWidth={selected || hovered ? 7 : 5}
+            style={{
+              opacity: selected || hovered ? 0.2 : 0.09,
+              filter: 'blur(1px)',
+              transition: 'opacity 0.15s, stroke-width 0.15s',
+            }}
+          />
+
+          {/* Main Crisp Bezier Path */}
+          <path
+            id={id}
+            d={edgePath}
+            fill="none"
+            stroke={strokeColor}
+            strokeWidth={selected || hovered ? 2.1 : 1.6}
+            style={{
+              opacity: selected || hovered ? 0.95 : 0.75,
+              transition: 'opacity 0.15s, stroke-width 0.15s',
+            }}
+          />
+
+          {/* Endpoint Dots */}
+          <circle cx={sourceX} cy={sourceY} r={3} fill={strokeColor} />
+          <circle cx={targetX} cy={targetY} r={3} fill={strokeColor} />
+        </g>
+
+        <EdgeLabelRenderer>
+          <div
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+              pointerEvents: showControls ? 'all' : 'none',
+            }}
+            className={`nodrag nopan flex items-center gap-1 bg-[#14161d]/95 backdrop-blur-md border border-white/[0.12] rounded-full px-2 py-0.5 shadow-xl transition-opacity duration-150 ${
+              showControls ? 'opacity-100' : 'opacity-0'
+            }`}
+          >
+            {/* Cardinality Select */}
+            <select
+              value={relation.type}
+              onChange={handleCardinalityChange}
+              className="bg-transparent text-[10px] font-mono font-semibold text-[#8b7ff0] outline-none cursor-pointer"
+              title="Relationship Cardinality"
             >
-              <span>{currentLabel}</span>
-              <svg className="w-2.5 h-2.5 text-indigo-400/60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
+              {CARDINALITY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value} className="bg-[#14161d] text-[#e8e8ee]">
+                  {opt.label}
+                </option>
+              ))}
+            </select>
 
-            {/* Dropdown Menu */}
-            {dropdownOpen && (
-              <div className="absolute top-full mt-1 left-0 bg-[#111111] border border-indigo-500/30 rounded-md shadow-2xl z-50 overflow-hidden py-1 w-full min-w-[70px]">
-                {CARDINALITY_OPTIONS.map(option => (
-                  <button
-                    key={option.value}
-                    onClick={() => handleCardinalityChange(option.value as Relation['type'])}
-                    className="w-full text-center px-2 py-1.5 text-[10px] font-mono font-bold text-indigo-300 hover:bg-indigo-500/10 transition-colors"
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+            <span className="text-white/15 text-[10px]">·</span>
 
-          {/* Native Styled Dropdown for OnDelete Cascade Rules */}
-          <div className="relative flex items-center bg-[#111111] hover:bg-[#18181b] rounded-md border border-amber-500/30 shadow-lg transition-all overflow-hidden">
+            {/* OnDelete Cascade Rule Select */}
             <select
               value={relation.onDelete || 'RESTRICT'}
               onChange={handleOnDeleteChange}
-              title="On Delete Action"
-              className="bg-transparent text-amber-300 font-mono text-[9px] font-bold px-2 py-1 pr-6 outline-none cursor-pointer appearance-none text-center"
+              className="bg-transparent text-[9.5px] font-mono text-[#e08a3c] outline-none cursor-pointer"
+              title="On Delete Behavior"
             >
-              <option value="RESTRICT" className="bg-[#111111] text-amber-300">RESTRICT</option>
-              <option value="CASCADE" className="bg-[#111111] text-amber-300">CASCADE</option>
-              <option value="SET NULL" className="bg-[#111111] text-amber-300">SET NULL</option>
-              <option value="SET DEFAULT" className="bg-[#111111] text-amber-300">SET DEFAULT</option>
+              <option value="RESTRICT" className="bg-[#14161d] text-[#e8e8ee]">
+                RESTRICT
+              </option>
+              <option value="CASCADE" className="bg-[#14161d] text-[#e8e8ee]">
+                CASCADE
+              </option>
+              <option value="SET NULL" className="bg-[#14161d] text-[#e8e8ee]">
+                SET NULL
+              </option>
+              <option value="SET DEFAULT" className="bg-[#14161d] text-[#e8e8ee]">
+                SET DEFAULT
+              </option>
             </select>
-            <div className="absolute right-1.5 pointer-events-none">
-              <svg className="w-2.5 h-2.5 text-amber-400/60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
-              </svg>
-            </div>
-          </div>
 
-          <button 
-            onClick={handleDelete} 
-            className="text-rose-400 bg-[#111111] hover:bg-rose-500/20 rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-bold shadow-md border border-rose-500/30 transition-all hover:scale-105 ml-0.5"
-            title="Delete Relation"
-          >
-            ×
-          </button>
-        </div>
-      </EdgeLabelRenderer>
-    </>
-  );
-});
+            {/* Delete Relation Button */}
+            <button
+              type="button"
+              onClick={handleDelete}
+              className="ml-0.5 w-3.5 h-3.5 rounded-full text-[#8a8b9a] hover:text-[#e0708f] hover:bg-[#e0708f]/15 flex items-center justify-center text-[11px] leading-none cursor-pointer"
+              title="Delete relation"
+            >
+              ×
+            </button>
+          </div>
+        </EdgeLabelRenderer>
+      </>
+    );
+  }
+);
 
 RelationEdge.displayName = 'RelationEdge';
