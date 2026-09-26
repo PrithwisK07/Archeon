@@ -121,8 +121,9 @@ function CanvasInner() {
   const { fitView, setCenter, getNode } = useReactFlow();
 
   const [isGenerating, setIsGenerating] = useState(false);
-  const [editorModalMode, setEditorModalMode] = useState<'swagger' | 'code' | null>(null);
+  const [isCodeOpen, setIsCodeOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [copiedRoutineId, setCopiedRoutineId] = useState<string | null>(null);
 
   // GitHub Export Modal State
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -266,6 +267,37 @@ function CanvasInner() {
       },
     });
     showToast('New table added — describe its fields to Copilot to fill it in');
+  };
+
+  const handleToggleCode = async () => {
+    const nextState = !isCodeOpen;
+    setIsCodeOpen(nextState);
+    if (nextState) {
+      setIsCopilotOpen(false);
+      closeInspector();
+      compileArchitecture();
+    }
+  };
+
+  const handleToggleCopilot = () => {
+    const nextState = !isCopilotOpen;
+    setIsCopilotOpen(nextState);
+    if (nextState) {
+      setIsCodeOpen(false);
+    }
+  };
+
+  const handleCopyRoutineSql = async (routine: CustomSqlSnippet) => {
+    try {
+      await navigator.clipboard.writeText(routine.sql);
+      setCopiedRoutineId(routine.id);
+      showToast('SQL copied to clipboard');
+      setTimeout(() => {
+        setCopiedRoutineId((prev) => (prev === routine.id ? null : prev));
+      }, 2000);
+    } catch {
+      showToast('Failed to copy SQL');
+    }
   };
 
   const handleAISubmit = useCallback(
@@ -456,6 +488,10 @@ function CanvasInner() {
     ? currentIR.customSql?.find((r) => r.id === activeRoutineId) || null
     : null;
 
+  const modalExistingRoutines = sqlModal
+    ? (currentIR.customSql || []).filter((r) => r.targetEntity === sqlModal.entityName)
+    : [];
+
   return (
     <div className="flex flex-col h-screen w-screen bg-[#0b0c10] text-[#e8e8ee] overflow-hidden select-none">
       {/* ================= TOPBAR ================= */}
@@ -509,28 +545,32 @@ function CanvasInner() {
 
         <div className="flex-1" />
 
-        {/* Swagger Playground Button */}
+        {/* <> Code Overlay Toggle Button */}
         <button
           type="button"
-          onClick={() => setEditorModalMode('swagger')}
-          className="px-[13px] py-[7px] rounded-[7px] border border-white/[0.09] bg-white/[0.045] hover:bg-white/[0.07] hover:border-white/[0.22] text-[13px] flex items-center gap-[7px] transition-all cursor-pointer"
+          onClick={handleToggleCode}
+          className={`px-[13px] py-[7px] rounded-[7px] border text-[13px] flex items-center gap-[7px] transition-all cursor-pointer ${
+            isCodeOpen
+              ? 'border-white/[0.28] bg-white/[0.09] text-[#e8e8ee]'
+              : 'border-white/[0.09] bg-white/[0.045] hover:bg-white/[0.07] hover:border-white/[0.22]'
+          }`}
         >
           <svg
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
-            strokeWidth="1.6"
-            className="w-3.5 h-3.5"
+            strokeWidth="1.8"
+            className="w-3.5 h-3.5 scale-130"
           >
-            <path d="M4 6h16M4 12h16M4 18h10" />
+            <path d="M8 9l-4 3 4 3M16 9l4 3-4 3" />
           </svg>
-          Swagger
+          Code
         </button>
 
-        {/* Copilot Button */}
+        {/* Copilot Overlay Toggle Button */}
         <button
           type="button"
-          onClick={() => setIsCopilotOpen(!isCopilotOpen)}
+          onClick={handleToggleCopilot}
           className={`px-[13px] py-[7px] rounded-[7px] border text-[13px] flex items-center gap-[7px] transition-all cursor-pointer ${
             isCopilotOpen
               ? 'border-[#8b7ff0]/50 bg-[#8b7ff0]/15 text-[#e8e8ee]'
@@ -573,7 +613,7 @@ function CanvasInner() {
         {/* Left Collapsible Schema Explorer */}
         <SchemaExplorer />
 
-        {/* Center Canvas / SQL Routine Code View (strictly overflow-hidden) */}
+        {/* Center Canvas / SQL Routine Code View (All Right Panels Overlay Here) */}
         <div className="relative flex-1 min-w-0 h-full overflow-hidden bg-[#0b0c10]">
           {!activeRoutine ? (
             <>
@@ -607,7 +647,7 @@ function CanvasInner() {
                 />
               </ReactFlow>
 
-              {/* Draggable Sticky Notes Layer (Pure Inline Tailwind) */}
+              {/* Draggable Sticky Notes Layer */}
               {notes.map((note) => (
                 <div
                   key={note.id}
@@ -697,7 +737,7 @@ function CanvasInner() {
           ) : (
             /* ================= SQL ROUTINE CODE VIEW ================= */
             <div className="absolute inset-0 z-28 flex flex-col bg-[#0b0c10] px-[30px] py-[22px]">
-              <div className="flex items-center gap-3 mb-4">
+              <div className="flex items-center gap-3 mb-4 flex-wrap">
                 <button
                   type="button"
                   onClick={() => setActiveRoutineId(null)}
@@ -735,6 +775,42 @@ function CanvasInner() {
 
                 <div className="flex-1" />
 
+                {/* Copy SQL Button */}
+                <button
+                  type="button"
+                  onClick={() => handleCopyRoutineSql(activeRoutine)}
+                  className="px-[13px] py-[7px] rounded-[7px] border border-white/[0.09] bg-white/[0.045] hover:bg-white/[0.07] text-[13px] flex items-center gap-2 cursor-pointer transition-colors"
+                >
+                  {copiedRoutineId === activeRoutine.id ? (
+                    <>
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="#8fbf6b"
+                        strokeWidth="2"
+                        className="w-3.5 h-3.5"
+                      >
+                        <path d="M20 6L9 17l-5-5" />
+                      </svg>
+                      <span className="text-[#8fbf6b]">Copied</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        className="w-3.5 h-3.5"
+                      >
+                        <rect x="9" y="9" width="13" height="13" rx="2" />
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                      </svg>
+                      Copy SQL
+                    </>
+                  )}
+                </button>
+
                 {activeRoutine.targetEntity && (
                   <button
                     type="button"
@@ -769,7 +845,7 @@ function CanvasInner() {
               </div>
 
               {/* Metadata Chips */}
-              <div className="flex gap-2 mb-4 flex-wrap">
+              <div className="flex gap-2 mb-3 flex-wrap">
                 <span className="text-[11px] font-mono text-[#8a8b9a] bg-white/[0.045] border border-white/[0.09] px-2.5 py-[5px] rounded-lg">
                   Language: plpgsql
                 </span>
@@ -783,28 +859,42 @@ function CanvasInner() {
                 </span>
               </div>
 
+              {/* Saved Prompt Banner */}
+              {activeRoutine.prompt && (
+                <div className="mb-3.5 px-3.5 py-2.5 rounded-xl bg-[#8b7ff0]/[0.08] border border-[#8b7ff0]/25 flex items-start gap-2.5">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    className="w-3.5 h-3.5 text-[#8b7ff0] mt-0.5 shrink-0"
+                  >
+                    <path d="M13 2 3 14h7l-1 8 11-14h-7z" />
+                  </svg>
+                  <div className="text-[12px] leading-[1.45]">
+                    <span className="font-mono text-[10.5px] uppercase tracking-wider text-[#8b7ff0] font-semibold mr-2">
+                      Prompt:
+                    </span>
+                    <span className="text-[#e8e8ee]/90 italic">
+                      &ldquo;{activeRoutine.prompt}&rdquo;
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Highlighted SQL Code Box */}
               <div className="flex-1 overflow-auto border border-white/[0.09] rounded-xl bg-[#101219]">
-                <pre className="m-0 p-5 font-mono text-[12.5px] leading-[1.7] text-[#e8e8ee] whitespace-pre-wrap">
+                <pre className="m-0 p-5 font-mono text-[12.5px] leading-[1.7] text-[#e8e8ee] whitespace-pre-wrap select-text">
                   {highlightSQLToJSX(activeRoutine.sql)}
                 </pre>
               </div>
             </div>
           )}
 
-          {/* Right Slide-Out Copilot & Field Inspector Panels */}
+          {/* ================= OVERLAY PANELS (COPILOT, INSPECTOR, CODE IDE) ================= */}
           <ChatConsole onSumbit={handleAISubmit} isThinking={isGenerating} />
+
+          {isCodeOpen && <EditorPanel onClose={() => setIsCodeOpen(false)} />}
         </div>
       </div>
-
-      {/* ================= SWAGGER / CODE COMPILER MODAL ================= */}
-      {editorModalMode && (
-        <EditorPanel
-          mode={editorModalMode}
-          onClose={() => setEditorModalMode(null)}
-          onSwitchMode={(m) => setEditorModalMode(m)}
-        />
-      )}
 
       {/* ================= AI SQL ROUTINE GENERATOR MODAL ================= */}
       {sqlModal?.isOpen && (
@@ -814,7 +904,7 @@ function CanvasInner() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-[min(480px,92vw)] bg-[#14161d] border border-white/[0.09] rounded-2xl shadow-2xl overflow-hidden"
+            className="w-[min(500px,92vw)] bg-[#14161d] border border-white/[0.09] rounded-2xl shadow-2xl overflow-hidden"
           >
             <div className="px-[18px] py-4 border-b border-white/[0.09] flex items-center">
               <b className="text-[14px]">AI PL/pgSQL Generator</b>
@@ -831,6 +921,37 @@ function CanvasInner() {
             </div>
 
             <div className="p-[18px] space-y-4">
+              {/* Existing Routines & Saved Prompts for this Table */}
+              {modalExistingRoutines.length > 0 && (
+                <div className="space-y-2 max-h-36 overflow-y-auto">
+                  <label className="block text-[10.5px] font-mono uppercase tracking-wider text-[#8a8b9a]">
+                    Active Routines on {sqlModal.entityName} ({modalExistingRoutines.length})
+                  </label>
+                  {modalExistingRoutines.map((snippet) => (
+                    <div
+                      key={snippet.id}
+                      onClick={() => {
+                        setSqlModal(null);
+                        setActiveRoutineId(snippet.id);
+                      }}
+                      className="p-2.5 rounded-lg bg-[#101219] border border-white/[0.08] hover:border-[#8b7ff0]/40 cursor-pointer transition-colors"
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[11px] font-mono text-[#8b7ff0] font-semibold">
+                          ⚡ {snippet.name}
+                        </span>
+                        <span className="text-[10px] font-mono text-[#565766]">
+                          View SQL →
+                        </span>
+                      </div>
+                      <p className="text-[12px] text-[#e8e8ee]/85 italic">
+                        &ldquo;{snippet.prompt}&rdquo;
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] text-[#8a8b9a] mb-1.5">Routine Type</label>

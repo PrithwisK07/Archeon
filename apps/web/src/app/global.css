@@ -19,6 +19,17 @@
   --font-mono: var(--font-jetbrains), 'JetBrains Mono', ui-monospace, monospace;
 }
 
+/* Hide all scrollbars globally while preserving scroll behavior */
+* {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+*::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
 body {
   font-family: var(--font-ui);
   background-color: var(--bg);
