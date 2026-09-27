@@ -274,24 +274,62 @@ export function deleteRowWithIntegrity(
 }
 
 export function clearTableWithIntegrity(ir: CanonicalIR, entityName: string): SeedResult {
-  const workingIR: CanonicalIR = JSON.parse(JSON.stringify(ir));
+  let workingIR: CanonicalIR = JSON.parse(JSON.stringify(ir));
   const entity = workingIR.entities.find((e) => e.name === entityName);
   if (!entity || !entity.seedData?.length) {
     return { ir: workingIR, message: `Cleared data for ${entityName}` };
   }
 
   const resolvedRels = resolveAllRelations(workingIR);
-  const deletingRows = [...entity.seedData];
-  entity.seedData = [];
+  const originalRows = [...entity.seedData];
+  const keptRows: Record<string, any>[] = [];
+  let deletedCount = 0;
+  let totalCascaded = 0;
 
-  const cascaded = applyReferentialDeleteActions(
-    workingIR,
-    resolvedRels,
-    entityName,
-    deletingRows
-  );
+  for (const row of originalRows) {
+    // Test deleting this individual row on a snapshot so partial failures don't corrupt state
+    const snapshotIR: CanonicalIR = JSON.parse(JSON.stringify(workingIR));
+    try {
+      const snapEnt = snapshotIR.entities.find((e) => e.name === entityName)!;
+      const keyField = snapEnt.fields.find((f) => isFieldPk(f))?.name || 'id';
 
-  const suffix = cascaded > 0 ? ` (cascaded ${cascaded} dependent row(s))` : '';
+      snapEnt.seedData = (snapEnt.seedData || []).filter(
+        (r) => String(r[keyField] ?? r.id) !== String(row[keyField] ?? row.id)
+      );
+
+      const cascaded = applyReferentialDeleteActions(
+        snapshotIR,
+        resolvedRels,
+        entityName,
+        [row]
+      );
+
+      workingIR = snapshotIR;
+      deletedCount++;
+      totalCascaded += cascaded;
+    } catch {
+      // Row is locked by a child RESTRICT constraint — keep it
+      keptRows.push(row);
+    }
+  }
+
+  const finalEntity = workingIR.entities.find((e) => e.name === entityName)!;
+  finalEntity.seedData = keptRows;
+
+  if (deletedCount === 0 && keptRows.length > 0) {
+    throw new Error(
+      `Cannot clear "${entityName}": all ${keptRows.length} row(s) are referenced by child tables (RESTRICT)`
+    );
+  }
+
+  if (keptRows.length > 0) {
+    return {
+      ir: workingIR,
+      message: `Cleared ${deletedCount} row(s) from ${entityName} (${keptRows.length} kept due to FK RESTRICT)`,
+    };
+  }
+
+  const suffix = totalCascaded > 0 ? ` (cascaded ${totalCascaded} dependent row(s))` : '';
   return { ir: workingIR, message: `Cleared data for ${entityName}${suffix}` };
 }
 

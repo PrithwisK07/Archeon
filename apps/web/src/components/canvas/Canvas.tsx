@@ -337,14 +337,18 @@ function CanvasInner() {
                 onPaneClick={() => closeInspector()}
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
-                panOnDrag={canvasMode === 'pan' ? true : [1, 2]}
+                panOnDrag={canvasMode === 'pan'}
                 nodesDraggable={canvasMode === 'select'}
                 elementsSelectable={canvasMode === 'select'}
                 fitView
                 proOptions={{ hideAttribution: true }}
                 minZoom={0.35}
                 maxZoom={1.8}
-                className="bg-[#0b0c10]"
+                className={`bg-[#0b0c10] ${
+                  canvasMode === 'select'
+                    ? '[&_.react-flow__pane]:!cursor-default'
+                    : '[&_.react-flow__pane]:!cursor-grab active:[&_.react-flow__pane]:!cursor-grabbing'
+                }`}
               >
                 <Background
                   variant={BackgroundVariant.Dots}

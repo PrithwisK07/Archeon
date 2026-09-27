@@ -38,11 +38,14 @@ export interface ChatMessage {
   content: string;
 }
 
+export type StickyNoteColor = 'yellow' | 'amber' | 'rose' | 'violet' | 'cyan' | 'lime';
+
 export interface StickyNote {
   id: string;
   x: number;
   y: number;
   text: string;
+  color?: StickyNoteColor;
 }
 
 export interface InspectorTarget {
@@ -280,19 +283,29 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
     },
 
     clearTableData: (entityName) => {
-      const { setEntitySeedData, showToast } = get();
-      setEntitySeedData(entityName, []);
-      showToast(`Cleared data for ${entityName}`);
+      const { present, applyAIPatch, showToast } = get();
+      try {
+        const result = SeedEngine.clearTableWithIntegrity(present, entityName);
+        applyAIPatch(result.ir);
+        showToast(result.message);
+      } catch (err: any) {
+        showToast(err.message);
+      }
     },
 
     setCanvasMode: (mode) => set({ canvasMode: mode }),
 
     addNote: () => {
+      const palette: StickyNoteColor[] = ['yellow', 'amber', 'rose', 'violet', 'cyan', 'lime'];
+      const currentNotes = get().notes;
+      const nextColor = palette[currentNotes.length % palette.length];
+
       const newNote: StickyNote = {
         id: `note_${Date.now()}`,
         x: 220 + Math.round(Math.random() * 80),
         y: 160 + Math.round(Math.random() * 80),
         text: 'New note — click to edit',
+        color: nextColor,
       };
       set((state) => ({ notes: [...state.notes, newNote] }));
       get().showToast('Note added to canvas');
