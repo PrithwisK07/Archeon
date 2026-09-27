@@ -5,6 +5,7 @@ import { ResilientWorkerManager } from '@zero-dollar/compiler/src/index';
 import { applyNodeChanges, NodeChange, Node } from 'reactflow';
 import { ReactFlowAdapter, UINodeData } from '../lib/reactFlowAdapter';
 import { ShadowGraph } from '@zero-dollar/compiler/src/shadowGraph';
+import { SeedEngine } from '../lib/seedEngine';
 
 const compilerClient = typeof window !== 'undefined' ? new ResilientWorkerManager() : null;
 
@@ -58,7 +59,7 @@ interface ArchitectureState {
   projectId: string | null;
   projectName: string;
 
-  // The Time Machine (History Stack)
+  // History Stack
   past: CanonicalIR[];
   present: CanonicalIR;
   future: CanonicalIR[];
@@ -69,15 +70,13 @@ interface ArchitectureState {
   compileError: string | null;
   isDirty: boolean;
 
-  // GITHUB EXPORT STATE
+  // GitHub & Chat
   exportedRepoUrl: string | null;
   setExportedRepoUrl: (url: string | null) => void;
-
-  // CHAT HISTORY
   chatHistory: ChatMessage[];
   addChatMessage: (message: Omit<ChatMessage, 'id'>) => void;
 
-  // CLOUD SYNC
+  // Cloud Sync
   syncStatus: 'synced' | 'syncing' | 'error' | 'offline';
   setSyncStatus: (status: 'synced' | 'syncing' | 'error' | 'offline') => void;
   loadProjectState: (
@@ -88,7 +87,7 @@ interface ArchitectureState {
   ) => void;
   markClean: () => void;
 
-  // NEXUS STUDIO UI STATE
+  // Studio UI State
   isExplorerOpen: boolean;
   setIsExplorerOpen: (open: boolean) => void;
   isCopilotOpen: boolean;
@@ -96,8 +95,24 @@ interface ArchitectureState {
   inspectorTarget: InspectorTarget | null;
   openInspector: (entityName: string, fieldName: string) => void;
   closeInspector: () => void;
+
+  // Active Center Workspace Mode
   activeRoutineId: string | null;
   setActiveRoutineId: (id: string | null) => void;
+  activeTableName: string | null;
+  setActiveTableName: (name: string | null) => void;
+  isApiPlaygroundOpen: boolean;
+  setIsApiPlaygroundOpen: (open: boolean) => void;
+
+  // Table Seeding & Row Operations (Delegated to SeedEngine)
+  seedTableData: (entityName: string, count?: number) => void;
+  addTableRow: (entityName: string, initialData?: Record<string, any>) => Record<string, any> | null;
+  updateTableRow: (entityName: string, rowIndex: number, fieldName: string, value: any) => void;
+  deleteTableRow: (entityName: string, rowIndex: number) => void;
+  clearTableData: (entityName: string) => void;
+  setEntitySeedData: (entityName: string, rows: Record<string, any>[]) => void;
+
+  // Canvas & Notes
   canvasMode: 'select' | 'pan';
   setCanvasMode: (mode: 'select' | 'pan') => void;
   notes: StickyNote[];
@@ -109,7 +124,7 @@ interface ArchitectureState {
   autoArrangeNodes: () => void;
   updateCompiledFile: (path: string, content: string) => void;
 
-  // ACTIONS
+  // Core Graph & Compiler Actions
   compileArchitecture: () => Promise<void>;
   initializeProject: (projectId: string) => Promise<void>;
   applyAIPatch: (newIR: CanonicalIR) => void;
@@ -158,11 +173,12 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
     syncStatus: 'synced',
     exportedRepoUrl: null,
 
-    // Nexus UI defaults
     isExplorerOpen: true,
     isCopilotOpen: false,
     inspectorTarget: null,
     activeRoutineId: null,
+    activeTableName: null,
+    isApiPlaygroundOpen: false,
     canvasMode: 'select',
     notes: [],
     toastMessage: null,
@@ -183,7 +199,91 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
 
     closeInspector: () => set({ inspectorTarget: null }),
 
-    setActiveRoutineId: (id) => set({ activeRoutineId: id }),
+    setActiveRoutineId: (id) =>
+      set({
+        activeRoutineId: id,
+        activeTableName: null,
+        isApiPlaygroundOpen: false,
+      }),
+
+    setActiveTableName: (name) =>
+      set({
+        activeTableName: name,
+        activeRoutineId: null,
+        isApiPlaygroundOpen: false,
+      }),
+
+    setIsApiPlaygroundOpen: (open) =>
+      set({
+        isApiPlaygroundOpen: open,
+        activeRoutineId: null,
+        activeTableName: null,
+      }),
+
+    setEntitySeedData: (entityName, rows) => {
+      const { present, applyAIPatch } = get();
+      const newEntities = present.entities.map((ent) =>
+        ent.name === entityName ? { ...ent, seedData: rows } : ent
+      );
+      applyAIPatch({ ...present, entities: newEntities });
+    },
+
+    seedTableData: (entityName, count = 5) => {
+      const { present, applyAIPatch, showToast } = get();
+      const result = SeedEngine.seedEntityWithDependencies(present, entityName, count);
+      applyAIPatch(result.ir);
+      showToast(result.message);
+    },
+
+    addTableRow: (entityName, initialData) => {
+      const { present, setEntitySeedData } = get();
+      const entity = present.entities.find((e) => e.name === entityName);
+      if (!entity) return null;
+
+      const newRow = SeedEngine.createBlankRow(entity, initialData, present);
+      setEntitySeedData(entityName, [...(entity.seedData || []), newRow]);
+      return newRow;
+    },
+
+    updateTableRow: (entityName, rowIndex, fieldName, value) => {
+      const { present, projectId } = get();
+      const entity = present.entities.find((e) => e.name === entityName);
+      if (!entity || !entity.seedData) return;
+
+      const fieldDef = entity.fields.find((f) => f.name === fieldName);
+      const coercedValue = SeedEngine.coerceCellValue(fieldDef, value);
+
+      const nextRows = entity.seedData.map((row, idx) =>
+        idx === rowIndex ? { ...row, [fieldName]: coercedValue } : row
+      );
+
+      const newIR: CanonicalIR = {
+        ...present,
+        entities: present.entities.map((ent) =>
+          ent.name === entityName ? { ...ent, seedData: nextRows } : ent
+        ),
+      };
+
+      set({ present: newIR, isDirty: true, syncStatus: 'syncing' });
+      if (projectId) persistToDB(projectId, newIR);
+    },
+
+    deleteTableRow: (entityName, rowIndex) => {
+      const { present, applyAIPatch, showToast } = get();
+      try {
+        const result = SeedEngine.deleteRowWithIntegrity(present, entityName, rowIndex);
+        applyAIPatch(result.ir);
+        showToast(result.message);
+      } catch (err: any) {
+        showToast(err.message);
+      }
+    },
+
+    clearTableData: (entityName) => {
+      const { setEntitySeedData, showToast } = get();
+      setEntitySeedData(entityName, []);
+      showToast(`Cleared data for ${entityName}`);
+    },
 
     setCanvasMode: (mode) => set({ canvasMode: mode }),
 
@@ -211,22 +311,17 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
     showToast: (msg) => {
       if (toastTimer) clearTimeout(toastTimer);
       set({ toastMessage: msg });
-      toastTimer = setTimeout(() => {
-        set({ toastMessage: null });
-      }, 3200);
+      toastTimer = setTimeout(() => set({ toastMessage: null }), 3200);
     },
 
     autoArrangeNodes: () => {
-      const cols = 3;
-      const gapX = 290;
-      const gapY = 260;
+      const cols = 3,
+        gapX = 290,
+        gapY = 260;
       set((state) => ({
         nodes: state.nodes.map((node, i) => ({
           ...node,
-          position: {
-            x: 60 + (i % cols) * gapX,
-            y: 60 + Math.floor(i / cols) * gapY,
-          },
+          position: { x: 60 + (i % cols) * gapX, y: 60 + Math.floor(i / cols) * gapY },
         })),
       }));
       get().showToast('Tables auto-arranged');
@@ -240,28 +335,44 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
       })),
 
     setExportedRepoUrl: (url) =>
-      set({
-        exportedRepoUrl: url,
-        isDirty: true,
-        syncStatus: 'syncing',
-      }),
+      set({ exportedRepoUrl: url, isDirty: true, syncStatus: 'syncing' }),
 
-    addChatMessage: (message) => {
+    addChatMessage: (message) =>
       set((state) => ({
         chatHistory: [...state.chatHistory, { ...message, id: crypto.randomUUID() }],
         isDirty: true,
         syncStatus: 'syncing',
-      }));
-    },
+      })),
 
     setSyncStatus: (status) => set({ syncStatus: status }),
 
     loadProjectState: (ir, chatHistory, repoUrl, name) => {
-      const safeIR = {
-        ...DEFAULT_IR,
-        ...(ir || {}),
-        customSql: ir?.customSql || [],
-      };
+      const safeIR: CanonicalIR = JSON.parse(
+        JSON.stringify({ ...DEFAULT_IR, ...(ir || {}), customSql: ir?.customSql || [] })
+      );
+
+      // Clean up any dangling relations pointing to deleted fields & demote PK->PK targets once on load
+      safeIR.relations = safeIR.relations.filter((rel) => {
+        const sEnt = safeIR.entities.find((e) => e.name === rel.sourceEntity);
+        const tEnt = safeIR.entities.find((e) => e.name === rel.targetEntity);
+        if (!sEnt || !tEnt) return false;
+        if (rel.sourceField && !sEnt.fields.some((f) => f.name === rel.sourceField)) return false;
+        if (rel.targetField && !tEnt.fields.some((f) => f.name === rel.targetField)) return false;
+
+        const sField = sEnt.fields.find((f) => f.name === rel.sourceField);
+        const tField = tEnt.fields.find((f) => f.name === rel.targetField);
+        if (
+          sField &&
+          tField &&
+          (sField.isPrimaryKey ?? sField.name === 'id') &&
+          (tField.isPrimaryKey ?? tField.name === 'id')
+        ) {
+          tField.isPrimaryKey = false;
+          tField.unique = false;
+        }
+        return true;
+      });
+
       set({
         present: safeIR,
         nodes: ReactFlowAdapter.generateNodes(safeIR),
@@ -274,36 +385,129 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
         projectName: name || 'untitled-workspace',
         inspectorTarget: null,
         activeRoutineId: null,
+        activeTableName: null,
+        isApiPlaygroundOpen: false,
       });
     },
 
     markClean: () => set({ isDirty: false, syncStatus: 'synced' }),
 
     dispatchManualAction: (command: IDECommand) => {
-      const { present, applyAIPatch, inspectorTarget } = get();
+      const { present, applyAIPatch, inspectorTarget, activeTableName, showToast } = get();
       try {
         if (command.action === 'ADD_CUSTOM_SQL') {
-          const newIR: CanonicalIR = {
+          applyAIPatch({
             ...present,
             customSql: [...(present.customSql || []), command.payload],
-          };
-          applyAIPatch(newIR);
+          });
           return;
         }
 
         if (command.action === 'REMOVE_CUSTOM_SQL') {
-          const newIR: CanonicalIR = {
+          applyAIPatch({
             ...present,
             customSql: (present.customSql || []).filter((s) => s.id !== command.id),
-          };
-          applyAIPatch(newIR);
+          });
           return;
         }
 
-        const newIR = ShadowGraph.simulateAndValidate(present, [command]);
-        applyAIPatch(newIR);
+        let simulatedIR = ShadowGraph.simulateAndValidate(present, [command]);
 
-        // Keep Inspector target synchronized if a field or entity was renamed
+        // 1. If a field was deleted, remove any relations plugged into that field so no ghost wires remain
+        if (command.action === 'REMOVE_FIELD') {
+          simulatedIR = {
+            ...simulatedIR,
+            relations: simulatedIR.relations.filter(
+              (rel) =>
+                !(
+                  rel.sourceEntity === command.targetEntity &&
+                  rel.sourceField === command.targetField
+                ) &&
+                !(
+                  rel.targetEntity === command.targetEntity &&
+                  rel.targetField === command.targetField
+                )
+            ),
+          };
+        }
+
+        // 2. If a relation was connected PK -> PK, demote the target field in the store immediately
+        if (command.action === 'ADD_RELATION') {
+          const { sourceEntity, targetEntity, sourceField, targetField } = command.payload;
+          const sEnt = simulatedIR.entities.find((e) => e.name === sourceEntity);
+          const tEnt = simulatedIR.entities.find((e) => e.name === targetEntity);
+          const sField = sEnt?.fields.find((f) => f.name === sourceField);
+          const tField = tEnt?.fields.find((f) => f.name === targetField);
+
+          if (
+            sField &&
+            tField &&
+            (sField.isPrimaryKey ?? sField.name === 'id') &&
+            (tField.isPrimaryKey ?? tField.name === 'id')
+          ) {
+            tField.isPrimaryKey = false;
+            tField.unique = false;
+          }
+        }
+
+        // 3. If user explicitly toggles Primary Key ON in the Inspector, remove any incoming FK wire on that field
+        if (command.action === 'UPDATE_FIELD' && command.payload.isPrimaryKey === true) {
+          const fieldName = command.payload.name || command.targetField;
+          const beforeCount = simulatedIR.relations.length;
+          simulatedIR = {
+            ...simulatedIR,
+            relations: simulatedIR.relations.filter(
+              (rel) =>
+                !(rel.targetEntity === command.targetEntity && rel.targetField === fieldName)
+            ),
+          };
+          if (simulatedIR.relations.length < beforeCount) {
+            showToast('Promoted to Primary Key (removed incoming FK relation)');
+          }
+        }
+
+        // 4. If a field was renamed, keep relation handles pointing to the new field name
+        if (
+          command.action === 'UPDATE_FIELD' &&
+          command.payload.name &&
+          command.payload.name !== command.targetField
+        ) {
+          const newFieldName = command.payload.name;
+          simulatedIR = {
+            ...simulatedIR,
+            relations: simulatedIR.relations.map((rel) => ({
+              ...rel,
+              sourceField:
+                rel.sourceEntity === command.targetEntity &&
+                rel.sourceField === command.targetField
+                  ? newFieldName
+                  : rel.sourceField,
+              targetField:
+                rel.targetEntity === command.targetEntity &&
+                rel.targetField === command.targetField
+                  ? newFieldName
+                  : rel.targetField,
+            })),
+          };
+        }
+
+        const syncedIR = SeedEngine.synchronizeSchemaAndData(present, simulatedIR);
+        applyAIPatch(syncedIR);
+
+        if (command.action === 'UPDATE_ENTITY' && command.payload.name) {
+          if (activeTableName === command.targetEntity) {
+            set({ activeTableName: command.payload.name });
+          }
+          if (inspectorTarget?.entityName === command.targetEntity) {
+            set({ inspectorTarget: { ...inspectorTarget, entityName: command.payload.name } });
+          }
+        }
+
+        if (command.action === 'REMOVE_ENTITY') {
+          if (activeTableName === command.targetEntity) set({ activeTableName: null });
+          if (inspectorTarget?.entityName === command.targetEntity) set({ inspectorTarget: null });
+        }
+
         if (
           command.action === 'UPDATE_FIELD' &&
           inspectorTarget &&
@@ -326,27 +530,19 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
 
     compileArchitecture: async () => {
       if (!compilerClient) return;
-
       set({ isCompiling: true, compileError: null });
       try {
-        const currentIR = get().present;
-        const files = await compilerClient.compileWithTimeout(currentIR, 8000);
+        const files = await compilerClient.compileWithTimeout(get().present, 8000);
         set({ compiledFiles: files, isCompiling: false, isDirty: false });
       } catch (error: any) {
-        console.error('Compilation failed:', error);
-        set({
-          compileError: error.message || 'Compilation failed',
-          isCompiling: false,
-        });
+        set({ compileError: error.message || 'Compilation failed', isCompiling: false });
       }
     },
 
     initializeProject: async (projectId: string) => {
       try {
         const localData = await db.projects.get(projectId);
-        let ir = localData ? localData.canonical_ir : DEFAULT_IR;
-        ir = { ...ir, customSql: ir.customSql || [] };
-
+        const ir = { ...(localData ? localData.canonical_ir : DEFAULT_IR), customSql: localData?.canonical_ir?.customSql || [] };
         set({
           projectId,
           projectName: 'untitled-workspace',
@@ -366,69 +562,50 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
 
     applyAIPatch: (newIR: CanonicalIR) => {
       const { present, projectId, past, nodes } = get();
-      const newPast = [...past, present].slice(-50);
       const safeIR = { ...newIR, customSql: newIR.customSql || [] };
-
       set({
-        past: newPast,
+        past: [...past, present].slice(-50),
         present: safeIR,
         future: [],
         nodes: syncUINodes(safeIR, nodes),
         isDirty: true,
         syncStatus: 'syncing',
       });
-
       if (projectId) persistToDB(projectId, safeIR);
     },
 
     undo: () => {
       const { past, present, future, projectId, nodes, showToast } = get();
-      if (past.length === 0) {
-        showToast('Nothing to undo');
-        return;
-      }
-
+      if (past.length === 0) return showToast('Nothing to undo');
       const previous = past[past.length - 1];
-      const newPast = past.slice(0, past.length - 1);
-
       set({
-        past: newPast,
+        past: past.slice(0, -1),
         present: previous,
         future: [present, ...future],
         nodes: syncUINodes(previous, nodes),
         isDirty: true,
         syncStatus: 'syncing',
       });
-
       if (projectId) persistToDB(projectId, previous);
     },
 
     redo: () => {
       const { past, present, future, projectId, nodes, showToast } = get();
-      if (future.length === 0) {
-        showToast('Nothing to redo');
-        return;
-      }
-
+      if (future.length === 0) return showToast('Nothing to redo');
       const next = future[0];
-      const newFuture = future.slice(1);
-
       set({
         past: [...past, present],
         present: next,
-        future: newFuture,
+        future: future.slice(1),
         nodes: syncUINodes(next, nodes),
         isDirty: true,
         syncStatus: 'syncing',
       });
-
       if (projectId) persistToDB(projectId, next);
     },
 
     onNodesChange: (changes: NodeChange[]) => {
-      set({
-        nodes: applyNodeChanges(changes, get().nodes),
-      });
+      set({ nodes: applyNodeChanges(changes, get().nodes) });
     },
   };
 });
