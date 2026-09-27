@@ -78,32 +78,52 @@ export function ApiPlaygroundView() {
     }
   }, [present.entities, targetEntity]);
 
-  const resetSamplePayload = () => {
+  const hydratePayloadForRow = (rowId?: string) => {
     if (!targetEntity) return;
+    const rows = targetEntity.seedData || [];
+    const matchedRow =
+      rowId !== undefined
+        ? rows.find((r) => String(r[pkFieldName] ?? r.id) === rowId.trim())
+        : rows[0];
+
     const { kvFields: nextKv, jsonText } = buildSamplePayloadForEntity(
       present,
       targetEntity,
       resolvedRelations,
-      selectedEp.methodType
+      selectedEp.methodType,
+      matchedRow
     );
     setKvFields(nextKv);
     setRequestBodyText(jsonText);
     setJsonError(null);
   };
 
+  // When switching endpoint or entity, initialize pathIdParam and tabs
   useEffect(() => {
     setResponseState(null);
     if (!targetEntity) return;
 
     const firstRow = targetEntity.seedData?.[0];
     const firstId = firstRow?.[pkFieldName] ?? firstRow?.id;
-    setPathIdParam(firstId !== undefined ? String(firstId) : '');
+    const initialId = firstId !== undefined ? String(firstId) : '';
+    setPathIdParam(initialId);
 
     const needsBody =
       selectedEp.methodType === 'POST' || selectedEp.methodType === 'PUT';
     setActiveTab(needsBody ? 'body' : 'params');
-    if (needsBody) resetSamplePayload();
+
+    if (needsBody) {
+      hydratePayloadForRow(initialId);
+    }
   }, [selectedEp.entityName, selectedEp.methodType, targetEntity?.name]);
+
+  // When user picks a different target record ID in PUT mode, load that record's current fields into the body!
+  const handleSelectTargetId = (newId: string) => {
+    setPathIdParam(newId);
+    if (selectedEp.methodType === 'PUT') {
+      hydratePayloadForRow(newId);
+    }
+  };
 
   const handleSyncKvToJson = (updatedKv: KeyValueField[]) => {
     setKvFields(updatedKv);
@@ -141,19 +161,35 @@ export function ApiPlaygroundView() {
   };
 
   const activeMeta = getEndpointMeta(selectedEp.entityName, selectedEp.methodType);
+  
+  const needsTableIdParam = selectedEp.methodType === 'DELETE' || selectedEp.methodType === 'GET_ID';
   const needsIdParam =
-    selectedEp.methodType === 'GET_ID' ||
-    selectedEp.methodType === 'PUT' ||
-    selectedEp.methodType === 'DELETE';
+    selectedEp.methodType === 'PUT';
   const needsBody =
     selectedEp.methodType === 'POST' || selectedEp.methodType === 'PUT';
 
-  const existingIds = useMemo(() => {
+  const existingRowsWithLabels = useMemo(() => {
     if (!targetEntity?.seedData) return [];
+    const labelField = targetEntity.fields.find(
+      (f) => f.name !== pkFieldName && (f.type === 'string' || f.type === 'number')
+    )?.name;
+
     return targetEntity.seedData
-      .map((r) => String(r[pkFieldName] ?? r.id ?? ''))
-      .filter(Boolean);
-  }, [targetEntity?.seedData, pkFieldName]);
+      .map((r, idx) => {
+        const idVal = String(r[pkFieldName] ?? r.id ?? '');
+        const preview = labelField && r[labelField] ? ` — ${String(r[labelField]).slice(0, 24)}` : '';
+        return {
+          idVal,
+          label: `Row #${idx + 1}: ${idVal.slice(0, 14)}…${preview}`,
+        };
+      })
+      .filter((item) => Boolean(item.idVal));
+  }, [targetEntity, pkFieldName]);
+
+  const existingIds = useMemo(
+    () => existingRowsWithLabels.map((item) => item.idVal),
+    [existingRowsWithLabels]
+  );
 
   const liveUrlPreview = useMemo(() => {
     const base = `/v1/${selectedEp.entityName.toLowerCase()}`;
@@ -201,7 +237,7 @@ export function ApiPlaygroundView() {
 
         <div className="flex-1 overflow-y-auto p-6">
           {targetEntity ? (
-            <div className="max-w-4xl space-y-5">
+            <div className="max-w-4xl space-y-4">
               {/* URL Bar + Send Button */}
               <div className="flex items-center gap-2.5">
                 <div className="flex-1 flex items-center bg-[#101219] border border-white/[0.1] rounded-[10px] p-1.5 gap-2.5">
@@ -224,6 +260,48 @@ export function ApiPlaygroundView() {
                 </button>
               </div>
 
+              {/* Dedicated Target Record Selector Bar for PUT /{id}, GET /{id}, DELETE /{id} */}
+              {needsIdParam && (
+                <div className="flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl bg-[#14161d] border border-white/[0.09]">
+                  <span className="text-[11.5px] font-mono font-semibold text-[#3fc6d8] uppercase tracking-wider">
+                    {selectedEp.methodType === 'PUT'
+                      ? `Target Record to Modify (${pkFieldName}):`
+                      : selectedEp.methodType === 'DELETE'
+                      ? `Target Record to Delete (${pkFieldName}):`
+                      : `Target Record to Fetch (${pkFieldName}):`}
+                  </span>
+
+                  <select
+                    value={existingIds.includes(pathIdParam) ? pathIdParam : ''}
+                    onChange={(e) => {
+                      if (e.target.value) handleSelectTargetId(e.target.value);
+                    }}
+                    className="bg-[#0b0c10] border border-white/[0.12] focus:border-[#3fc6d8]/60 rounded-lg px-3 py-1.5 font-mono text-[12px] text-[#e8e8ee] outline-none cursor-pointer min-w-[240px]"
+                  >
+                    <option value="">
+                      {existingRowsWithLabels.length > 0
+                        ? `Select existing ${targetEntity.name} row (${existingRowsWithLabels.length})…`
+                        : `No seeded rows in ${targetEntity.name} yet`}
+                    </option>
+                    {existingRowsWithLabels.map((item, i) => (
+                      <option key={i} value={item.idVal}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <span className="text-[11px] font-mono text-[#565766]">or ID:</span>
+
+                  <input
+                    type="text"
+                    value={pathIdParam}
+                    onChange={(e) => handleSelectTargetId(e.target.value)}
+                    placeholder={`Paste ${pkFieldName} value…`}
+                    className="flex-1 min-w-[200px] bg-[#0b0c10] border border-white/[0.09] focus:border-[#e08a3c]/60 rounded-lg px-3 py-1.5 font-mono text-[12px] text-[#e8e8ee] outline-none"
+                  />
+                </div>
+              )}
+
               {/* Request Tabs */}
               <div className="border border-white/[0.09] rounded-xl bg-[#101219] overflow-hidden">
                 <div className="px-4 border-b border-white/[0.08] bg-[#14161d]/70 flex items-center gap-6 h-[42px]">
@@ -237,7 +315,7 @@ export function ApiPlaygroundView() {
                     }`}
                   >
                     Params
-                    {needsIdParam && <span className="w-1.5 h-1.5 rounded-full bg-[#e08a3c]" />}
+                    {needsTableIdParam && <span className="w-1.5 h-1.5 rounded-full bg-[#e08a3c]" />}
                   </button>
 
                   {needsBody && (
@@ -250,7 +328,7 @@ export function ApiPlaygroundView() {
                           : 'border-transparent text-[#8a8b9a] hover:text-[#e8e8ee]'
                       }`}
                     >
-                      Body
+                      {selectedEp.methodType === 'PUT' ? 'Update Body' : 'Create Body'}
                       <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-white/[0.06] text-[#8fbf6b]">
                         {bodyMode === 'table' ? 'form-table' : 'json'}
                       </span>
@@ -262,10 +340,10 @@ export function ApiPlaygroundView() {
                   <PlaygroundParamsTab
                     targetEntity={targetEntity}
                     methodType={selectedEp.methodType}
-                    needsIdParam={needsIdParam}
+                    needsIdParam={needsTableIdParam}
                     pkFieldName={pkFieldName}
                     pathIdParam={pathIdParam}
-                    onChangePathId={setPathIdParam}
+                    onChangePathId={handleSelectTargetId}
                     existingIds={existingIds}
                     queryParams={queryParams}
                     onChangeQueryParams={setQueryParams}
@@ -290,7 +368,7 @@ export function ApiPlaygroundView() {
                         setJsonError(e.message);
                       }
                     }}
-                    onResetSample={resetSamplePayload}
+                    onResetSample={() => hydratePayloadForRow(pathIdParam)}
                   />
                 )}
               </div>
