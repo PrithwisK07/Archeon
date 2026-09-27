@@ -210,7 +210,7 @@ export function TableDataView({ entity, onJumpToGraph }: TableDataViewProps) {
                         className="w-5 h-5 rounded text-[#565766] hover:text-[#e0708f] opacity-60 group-hover/row:opacity-100 flex items-center justify-center text-xs cursor-pointer"
                         title="Delete row"
                       >
-                        ×
+                        ✕
                       </button>
                     </td>
 

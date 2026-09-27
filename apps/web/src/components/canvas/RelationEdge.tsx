@@ -175,7 +175,7 @@ export const RelationEdge = memo(
               className="ml-0.5 w-3.5 h-3.5 rounded-full text-[#8a8b9a] hover:text-[#e0708f] hover:bg-[#e0708f]/15 flex items-center justify-center text-[11px] leading-none cursor-pointer"
               title="Delete relation"
             >
-              ×
+              ✕
             </button>
           </div>
         </EdgeLabelRenderer>

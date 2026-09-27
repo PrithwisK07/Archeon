@@ -188,7 +188,7 @@ export function PlaygroundParamsTab({
                           }
                           className="text-[#565766] hover:text-[#e0708f] cursor-pointer"
                         >
-                          ×
+                          ✕
                         </button>
                       )}
                     </td>
