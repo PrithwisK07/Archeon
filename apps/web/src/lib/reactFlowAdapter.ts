@@ -1,5 +1,6 @@
 import type { Node, Edge } from 'reactflow';
 import type { CanonicalIR, Relation, Entity } from '@zero-dollar/ir-core';
+import { SeedEngine } from './seedEngine';
 
 export const NEXUS_COLORS = {
   violet: '#8b7ff0',
@@ -27,25 +28,16 @@ export interface UIEdgeData {
 
 export class ReactFlowAdapter {
   public static generateNodes(ir: CanonicalIR): Node<UINodeData>[] {
+    const resolvedRels = SeedEngine.resolveAllRelations(ir);
+
     return ir.entities.map((entity, index) => {
       const colorKey = PALETTE_KEYS[index % PALETTE_KEYS.length];
       const colorHex = NEXUS_COLORS[colorKey];
 
-      // Identify Foreign Key fields on this entity from incoming or outgoing relations
       const fkSet = new Set<string>();
-      ir.relations.forEach((rel) => {
-        if (rel.targetEntity === entity.name) {
-          if (rel.targetField) {
-            fkSet.add(rel.targetField);
-          } else {
-            const conventional = `${rel.sourceEntity.toLowerCase()}Id`;
-            const snakeConventional = `${rel.sourceEntity.toLowerCase()}_id`;
-            if (entity.fields.some((f) => f.name === conventional)) fkSet.add(conventional);
-            if (entity.fields.some((f) => f.name === snakeConventional)) fkSet.add(snakeConventional);
-          }
-        }
-        if (rel.sourceEntity === entity.name && rel.sourceField && rel.sourceField !== 'id') {
-          fkSet.add(rel.sourceField);
+      resolvedRels.forEach((rel) => {
+        if (rel.childEntity === entity.name) {
+          fkSet.add(rel.childFkField);
         }
       });
 
@@ -71,31 +63,35 @@ export class ReactFlowAdapter {
       entityColorMap.set(e.name, NEXUS_COLORS[key]);
     });
 
-    return ir.relations.map((relation, index) => {
-      const srcStr = relation.sourceField || 'id';
-      const tgtStr = relation.targetField || 'id';
-      const edgeId = `rel_${relation.sourceEntity}_${srcStr}_${relation.targetEntity}_${tgtStr}_${index}`;
-      const colorHex = entityColorMap.get(relation.sourceEntity) || NEXUS_COLORS.violet;
+    const resolvedRels = SeedEngine.resolveAllRelations(ir);
 
-      // Resolve handles to existing fields if possible
+    return ir.relations.map((relation, index) => {
+      const resolved = resolvedRels.find((r) => r.rawRelation === relation);
       const sourceEntity = ir.entities.find((e) => e.name === relation.sourceEntity);
       const targetEntity = ir.entities.find((e) => e.name === relation.targetEntity);
 
       const resolvedSourceField =
         relation.sourceField ||
+        (resolved?.parentEntity === relation.sourceEntity
+          ? resolved.parentPkField
+          : resolved?.childFkField) ||
         sourceEntity?.fields.find((f) => f.isPrimaryKey || f.name === 'id')?.name ||
         sourceEntity?.fields[0]?.name;
 
       const resolvedTargetField =
+        (relation.targetField && relation.targetField !== 'id'
+          ? relation.targetField
+          : undefined) ||
+        (resolved?.childEntity === relation.targetEntity
+          ? resolved.childFkField
+          : resolved?.parentPkField) ||
         relation.targetField ||
-        targetEntity?.fields.find(
-          (f) =>
-            f.name === `${relation.sourceEntity.toLowerCase()}_id` ||
-            f.name === `${relation.sourceEntity.toLowerCase()}Id` ||
-            f.isPrimaryKey ||
-            f.name === 'id'
-        )?.name ||
         targetEntity?.fields[0]?.name;
+
+      const srcStr = resolvedSourceField || 'id';
+      const tgtStr = resolvedTargetField || 'id';
+      const edgeId = `rel_${relation.sourceEntity}_${srcStr}_${relation.targetEntity}_${tgtStr}_${index}`;
+      const colorHex = entityColorMap.get(relation.sourceEntity) || NEXUS_COLORS.violet;
 
       return {
         id: edgeId,

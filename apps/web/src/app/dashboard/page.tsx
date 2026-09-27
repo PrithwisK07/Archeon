@@ -119,8 +119,27 @@ export default function Dashboard() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-[#0b0c10] flex items-center justify-center">
-        <div className="w-6 h-6 border-2 border-[#e08a3c] border-t-transparent rounded-full animate-spin" />
+      <div className="w-screen h-screen bg-[#0b0c10] text-[#e8e8ee] flex flex-col items-center justify-center gap-4 relative overflow-hidden select-none">
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            backgroundImage: 'radial-gradient(rgba(255,255,255,0.09) 1.4px, transparent 1.4px)',
+            backgroundSize: '26px 26px',
+          }}
+        />
+        <div className="relative z-10 flex flex-col items-center gap-3.5 bg-[#14161d] border border-white/[0.09] px-7 py-6 rounded-2xl shadow-[0_20px_50px_-15px_rgba(0,0,0,0.7)]">
+          <div className="relative flex items-center justify-center">
+            <div className="w-10 h-10 rounded-full border-2 border-[#e08a3c]/25 border-t-[#e08a3c] animate-spin" />
+            <svg viewBox="0 0 24 24" fill="none" className="w-4 h-4 absolute">
+              <path d="M4 12 L12 4 L20 12 L12 20 Z" stroke="#e08a3c" strokeWidth="1.8" />
+              <circle cx="12" cy="12" r="2.3" fill="#e08a3c" />
+            </svg>
+          </div>
+          <div className="flex flex-col items-center gap-1">
+            <span className="text-[13px] font-semibold tracking-[0.2px]">Nexus</span>
+            <span className="text-[11px] text-[#8a8b9a] font-mono">Loading workspaces…</span>
+          </div>
+        </div>
       </div>
     );
   }

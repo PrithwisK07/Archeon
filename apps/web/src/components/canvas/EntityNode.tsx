@@ -199,8 +199,8 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
       {/* Fields List */}
       <div className="flex flex-col py-0.5">
         {entity.fields.map((field) => {
-          const isPk = field.isPrimaryKey || field.name === 'id';
-          const isFk = !isPk && fkFields.includes(field.name);
+          const isFk = fkFields.includes(field.name);
+          const isPk = !isFk && (field.isPrimaryKey ?? field.name === 'id');
           const isInspected =
             inspectorTarget?.entityName === entity.name &&
             inspectorTarget?.fieldName === field.name;
