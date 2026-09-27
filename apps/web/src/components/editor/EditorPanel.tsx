@@ -292,7 +292,7 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
                       onClick={(e) => handleCloseTab(e, tabPath)}
                       className="w-3.5 h-3.5 rounded hover:bg-white/10 text-[#565766] hover:text-[#e8e8ee] opacity-0 group-hover/tab:opacity-100 flex items-center justify-center text-[10px] cursor-pointer"
                     >
-                      ×
+                      ✕
                     </button>
                   )}
                 </div>
@@ -307,7 +307,8 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
               title="Inline AI Code Generator (Cmd+K)"
               className="px-2 py-0.5 rounded bg-white/[0.04] hover:bg-[#8b7ff0]/15 border border-white/[0.08] hover:border-[#8b7ff0]/40 text-[10.5px] font-mono text-[#8a8b9a] hover:text-[#8b7ff0] transition-colors cursor-pointer"
             >
-              ⌘K
+              <span>⌘ </span>
+              <span className="font-semibold text-[12px]">K</span>
             </button>
             <button
               type="button"

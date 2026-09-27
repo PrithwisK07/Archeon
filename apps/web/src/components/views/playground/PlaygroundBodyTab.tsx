@@ -218,7 +218,7 @@ export function PlaygroundBodyTab({
                       }
                       className="text-[#565766] hover:text-[#e0708f] cursor-pointer"
                     >
-                      ×
+                      ✕
                     </button>
                   </td>
                 </tr>
