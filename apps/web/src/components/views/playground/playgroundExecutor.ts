@@ -12,10 +12,11 @@ export function buildSamplePayloadForEntity(
   present: CanonicalIR,
   targetEntity: Entity,
   resolvedRelations: ResolvedRelation[],
-  methodType: EndpointMethod
+  methodType: EndpointMethod,
+  targetRow?: Record<string, any>
 ): { kvFields: KeyValueField[]; jsonText: string } {
   const rows = targetEntity.seedData || [];
-  const sampleRow = rows[0];
+  const rowToUse = methodType === 'PUT' ? targetRow || rows[0] : rows[0];
 
   const incomingRels = resolvedRelations.filter((r) => r.childEntity === targetEntity.name);
   const fkFieldSet = new Set(incomingRels.map((r) => r.childFkField));
@@ -42,13 +43,13 @@ export function buildSamplePayloadForEntity(
         parentPkField: fkRel.parentPkField,
         options: parentOptions,
       };
-      val =
-        (methodType === 'PUT' && sampleRow?.[f.name]) ||
-        parentOptions[0] ||
-        sampleRow?.[f.name] ||
-        crypto.randomUUID();
-    } else if (sampleRow && sampleRow[f.name] !== undefined && sampleRow[f.name] !== null) {
-      val = sampleRow[f.name];
+    }
+
+    if (methodType === 'PUT' && rowToUse && rowToUse[f.name] !== undefined) {
+      // PUT: Load the exact current value from the selected record being modified
+      val = rowToUse[f.name];
+    } else if (fkInfo) {
+      val = fkInfo.options[0] || rowToUse?.[f.name] || crypto.randomUUID();
     } else if (f.type === 'uuid') {
       val = crypto.randomUUID();
     } else if (f.type === 'number') {
@@ -60,7 +61,7 @@ export function buildSamplePayloadForEntity(
     } else if (f.name === 'status') {
       val = 'pending';
     } else {
-      val = `sample_${f.name}`;
+      val = `new_${f.name}`;
     }
 
     sampleObj[f.name] = val;
@@ -68,7 +69,7 @@ export function buildSamplePayloadForEntity(
       id: `kv_${f.name}`,
       enabled: true,
       key: f.name,
-      value: String(val),
+      value: val === null || val === undefined ? '' : String(val),
       type: f.type,
       fkInfo,
     });
