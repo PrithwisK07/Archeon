@@ -2,6 +2,7 @@ import { memo, useState, useRef, useEffect } from 'react';
 import { Handle, Position, NodeProps } from 'reactflow';
 import type { UINodeData } from '../../lib/reactFlowAdapter';
 import { useArchitectureStore } from '../../store/architectureStore';
+import { SeedEngine } from '../../lib/seedEngine';
 import type { Field } from '@zero-dollar/ir-core';
 
 const DISPLAY_TYPE_LABELS: Record<Field['type'], string> = {
@@ -31,6 +32,7 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
     inspectorTarget,
     closeInspector,
     showToast,
+    autoWireCompositeRelation,
   } = useArchitectureStore();
 
   const [editingEntity, setEditingEntity] = useState(false);
@@ -39,6 +41,25 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
   useEffect(() => {
     if (editingEntity) entityInputRef.current?.focus();
   }, [editingEntity]);
+
+  const liveEntity =
+    present.entities.find((e) => e.name === entity.name) || entity;
+  const pkFields = SeedEngine.getEntityPkFields(liveEntity);
+  const isCompositePkTable = pkFields.length > 1;
+
+  // Detect if this table has an incomplete incoming composite FK
+  const incompleteIncoming = SeedEngine.getIncompleteCompositeRelations(
+    present
+  ).filter((g) => g.childEntity === liveEntity.name);
+
+  // Track which columns belong to secondary indexes (@@index or @@unique)
+  const indexedFieldsMap = new Map<string, boolean>();
+  (liveEntity.indexes || []).forEach((idx) => {
+    idx.fields.forEach((fName) => {
+      const prevUnique = indexedFieldsMap.get(fName) || false;
+      indexedFieldsMap.set(fName, prevUnique || Boolean(idx.unique));
+    });
+  });
 
   const attachedSnippets =
     present.customSql?.filter((sql) => sql.targetEntity === entity.name) || [];
@@ -91,14 +112,14 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
   return (
     <div
       style={{ '--accent': colorHex } as React.CSSProperties}
-      className={`group/node relative w-[242px] bg-[#14161d] rounded-[12px] select-none transition-all duration-150 ${
+      className={`group/node relative w-[248px] bg-[#14161d] rounded-[12px] select-none transition-all duration-150 ${
         selected
           ? 'border border-[var(--accent)] shadow-[0_14px_30px_-16px_rgba(0,0,0,0.65),0_0_0_1px_var(--accent)]'
           : 'border border-white/[0.09] shadow-[0_10px_26px_-14px_rgba(0,0,0,0.5)] hover:-translate-y-[1px] hover:shadow-[0_14px_30px_-16px_rgba(0,0,0,0.55)]'
       }`}
     >
       {/* Node Header */}
-      <div className="flex items-center gap-2 px-3 pt-[11px] pb-[10px] border-b border-white/[0.09] cursor-grab active:cursor-grabbing">
+      <div className="flex items-center gap-1.5 px-3 pt-[11px] pb-[10px] border-b border-white/[0.09] cursor-grab active:cursor-grabbing">
         <span
           className="w-[7px] h-[7px] rounded-full flex-none"
           style={{ backgroundColor: colorHex }}
@@ -131,6 +152,16 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
             </span>
           )}
         </div>
+
+        {/* Composite PK Badge */}
+        {isCompositePkTable && (
+          <span
+            title={`Composite Primary Key: (${pkFields.join(', ')})`}
+            className="text-[9px] font-mono px-1.5 py-[1px] rounded bg-[#e08a3c]/15 text-[#e08a3c] border border-[#e08a3c]/30 flex-none"
+          >
+            @@id({pkFields.length})
+          </span>
+        )}
 
         {/* Trigger Badge (if routines attached) or Add Trigger button on hover */}
         {attachedSnippets.length > 0 ? (
@@ -198,9 +229,15 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
 
       {/* Fields List */}
       <div className="flex flex-col py-0.5">
-        {entity.fields.map((field) => {
+        {liveEntity.fields.map((field) => {
           const isFk = fkFields.includes(field.name);
-          const isPk = !isFk && (field.isPrimaryKey ?? field.name === 'id');
+          const isMemberOfPk = pkFields.includes(field.name);
+          const isPk = isCompositePkTable
+            ? isMemberOfPk
+            : !isFk && (field.isPrimaryKey ?? field.name === 'id');
+          const isIndexed = indexedFieldsMap.has(field.name);
+          const isUniqueIdx = indexedFieldsMap.get(field.name) === true;
+
           const isInspected =
             inspectorTarget?.entityName === entity.name &&
             inspectorTarget?.fieldName === field.name;
@@ -212,7 +249,7 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
                 e.stopPropagation();
                 openInspector(entity.name, field.name);
               }}
-              className={`group/field relative flex items-center gap-[7px] py-[6.5px] pl-3 pr-2 text-[12px] font-mono transition-colors cursor-pointer ${
+              className={`group/field relative flex items-center gap-[6px] py-[6.5px] pl-3 pr-2 text-[12px] font-mono transition-colors cursor-pointer ${
                 isInspected ? 'bg-white/[0.06]' : 'hover:bg-white/[0.035]'
               }`}
             >
@@ -224,23 +261,52 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
                 className="nexus-handle !left-[-4px]"
               />
 
-              {/* Key Symbol: ◆ for PK, ○ for FK, · for normal */}
+              {/* Key Symbol: ◆○ for Join Table PK+FK, ◆ for PK, ○ for FK, · for normal */}
               <span
-                className={`w-[13px] flex-none text-center text-[9.5px] ${
-                  isPk
+                title={
+                  isPk && isFk
+                    ? 'Composite Primary Key + Foreign Key'
+                    : isPk
+                    ? 'Primary Key'
+                    : isFk
+                    ? 'Foreign Key'
+                    : undefined
+                }
+                className={`w-[15px] flex-none text-center text-[9.5px] ${
+                  isPk && isFk
+                    ? 'text-[#e08a3c]'
+                    : isPk
                     ? 'text-[#e08a3c]'
                     : isFk
                     ? 'text-[#3fc6d8]'
                     : 'text-[#565766]'
                 }`}
               >
-                {isPk ? '◆' : isFk ? '○' : '·'}
+                {isPk && isFk ? '◆○' : isPk ? '◆' : isFk ? '○' : '·'}
               </span>
 
               {/* Field Name */}
               <span className="text-[#e8e8ee] flex-1 truncate">
                 {field.name}
               </span>
+
+              {/* Index Badge (IDX / UQ) */}
+              {isIndexed && (
+                <span
+                  title={
+                    isUniqueIdx
+                      ? 'Part of @@unique index'
+                      : 'Part of @@index'
+                  }
+                  className={`text-[8.5px] font-mono px-1 py-[1px] rounded flex-none border ${
+                    isUniqueIdx
+                      ? 'bg-[#e08a3c]/14 text-[#e08a3c] border-[#e08a3c]/30'
+                      : 'bg-[#8b7ff0]/14 text-[#b5adf2] border-[#8b7ff0]/30'
+                  }`}
+                >
+                  {isUniqueIdx ? 'UQ' : 'IDX'}
+                </span>
+              )}
 
               {/* Colored Type Pill */}
               <span
@@ -274,6 +340,35 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
             </div>
           );
         })}
+
+        {/* Incomplete Composite FK Visual Warning Banner + 1-Click Auto-Wire */}
+        {incompleteIncoming.map((group) => (
+          <div
+            key={`${group.parentEntity}-${group.childEntity}`}
+            onClick={(e) => e.stopPropagation()}
+            className="nodrag nopan mx-2 my-1.5 p-2 rounded-lg bg-[#e08a3c]/12 border border-dashed border-[#e08a3c]/50 text-[10.5px] space-y-1.5"
+          >
+            <div className="flex items-start gap-1.5 text-[#e08a3c] font-mono leading-snug">
+              <span>⚠️</span>
+              <span>
+                Incomplete composite FK from <strong>{group.parentEntity}</strong>:
+                also wire{' '}
+                <code className="underline">
+                  {group.missingParentPkFields.join(', ')}
+                </code>
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                autoWireCompositeRelation(group.parentEntity, group.childEntity)
+              }
+              className="w-full py-1 px-2 rounded bg-[#e08a3c] text-[#1a1206] font-semibold text-[10.5px] hover:brightness-110 cursor-pointer transition-all"
+            >
+              + Auto-wire {group.missingParentPkFields.join(', ')}
+            </button>
+          </div>
+        ))}
 
         {/* Subtle Add Column Row on Card Hover */}
         <button

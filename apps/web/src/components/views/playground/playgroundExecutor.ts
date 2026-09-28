@@ -18,23 +18,29 @@ export function buildSamplePayloadForEntity(
   const rows = targetEntity.seedData || [];
   const rowToUse = methodType === 'PUT' ? targetRow || rows[0] : rows[0];
 
-  const incomingRels = resolvedRelations.filter((r) => r.childEntity === targetEntity.name);
+  const incomingRels = resolvedRelations.filter(
+    (r) => r.childEntity === targetEntity.name
+  );
   const fkFieldSet = new Set(incomingRels.map((r) => r.childFkField));
+  const pkFields = SeedEngine.getEntityPkFields(targetEntity);
+  const isCompositePk = pkFields.length > 1;
 
   const kvFields: KeyValueField[] = [];
   const sampleObj: Record<string, any> = {};
 
   targetEntity.fields.forEach((f) => {
     const isFk = fkFieldSet.has(f.name);
-    const isTruePk = !isFk && isFieldPk(f);
-    if (isTruePk) return;
+    const isSingleAutoPk = !isCompositePk && !isFk && isFieldPk(f);
+    if (isSingleAutoPk) return;
 
     const fkRel = incomingRels.find((r) => r.childFkField === f.name);
     let val: any = '';
     let fkInfo: KeyValueField['fkInfo'] | undefined;
 
     if (fkRel) {
-      const parentEnt = present.entities.find((e) => e.name === fkRel.parentEntity);
+      const parentEnt = present.entities.find(
+        (e) => e.name === fkRel.parentEntity
+      );
       const parentOptions = (parentEnt?.seedData || [])
         .map((r) => String(r[fkRel.parentPkField] ?? r.id))
         .filter(Boolean);
@@ -88,10 +94,17 @@ export function serializeKvToJson(
   const obj: Record<string, any> = {};
   kvFields.forEach((item) => {
     if (!item.enabled || !item.key.trim()) return;
-    const fieldDef = targetEntity?.fields.find((f) => f.name === item.key.trim());
+    const fieldDef = targetEntity?.fields.find(
+      (f) => f.name === item.key.trim()
+    );
     obj[item.key.trim()] = SeedEngine.coerceCellValue(
       fieldDef ||
-        ({ name: item.key, type: item.type, nullable: false, unique: false } as Field),
+        ({
+          name: item.key,
+          type: item.type,
+          nullable: false,
+          unique: false,
+        } as Field),
       item.value
     );
   });
@@ -116,7 +129,9 @@ export function parseJsonToKv(
     const fkRel = incomingRels.find((r) => r.childFkField === k);
     let fkInfo: KeyValueField['fkInfo'] | undefined;
     if (fkRel) {
-      const parentEnt = present.entities.find((e) => e.name === fkRel.parentEntity);
+      const parentEnt = present.entities.find(
+        (e) => e.name === fkRel.parentEntity
+      );
       fkInfo = {
         parentEntity: fkRel.parentEntity,
         parentPkField: fkRel.parentPkField,
@@ -166,7 +181,10 @@ export function executePlaygroundRequest(params: {
   pathIdParam: string;
   queryParams: QueryParamRow[];
   requestBodyText: string;
-  addTableRow: (entityName: string, initialData?: Record<string, any>) => Record<string, any> | null;
+  addTableRow: (
+    entityName: string,
+    initialData?: Record<string, any>
+  ) => Record<string, any> | null;
   setEntitySeedData: (entityName: string, rows: Record<string, any>[]) => void;
   applyAIPatch: (newIR: CanonicalIR) => void;
   showToast: (msg: string) => void;
@@ -190,7 +208,9 @@ export function executePlaygroundRequest(params: {
 
   // 1. GET LIST
   if (methodType === 'GET_LIST') {
-    const activeFilters = queryParams.filter((q) => q.enabled && q.key.trim() !== '');
+    const activeFilters = queryParams.filter(
+      (q) => q.enabled && q.key.trim() !== ''
+    );
     const filteredRows = rows.filter((row) =>
       activeFilters.every((q) =>
         String(row[q.key.trim()] ?? '')
@@ -202,13 +222,20 @@ export function executePlaygroundRequest(params: {
       200,
       'OK',
       `Fetched ${filteredRows.length} record(s) from ${targetEntity.name}`,
-      { statusCode: 200, status: 'OK', count: filteredRows.length, data: filteredRows }
+      {
+        statusCode: 200,
+        status: 'OK',
+        count: filteredRows.length,
+        data: filteredRows,
+      }
     );
   }
 
-  // 2. GET BY ID
+  // 2. GET BY ID (supports single PK or composite PK "colA::colB")
   if (methodType === 'GET_ID') {
-    const found = rows.find((r) => String(r[pkFieldName] ?? r.id) === targetId);
+    const found = rows.find(
+      (r) => SeedEngine.getRowCompositeKey(targetEntity, r) === targetId
+    );
     if (!found) {
       return makeResponse(
         404,
@@ -233,8 +260,17 @@ export function executePlaygroundRequest(params: {
   if (methodType === 'POST') {
     try {
       const parsed = JSON.parse(requestBodyText || '{}');
-      const candidate = SeedEngine.createBlankRow(targetEntity, parsed, present);
-      SeedEngine.validateRowConstraints(present, targetEntity.name, candidate, -1);
+      const candidate = SeedEngine.createBlankRow(
+        targetEntity,
+        parsed,
+        present
+      );
+      SeedEngine.validateRowConstraints(
+        present,
+        targetEntity.name,
+        candidate,
+        -1
+      );
       const created = addTableRow(targetEntity.name, candidate);
       showToast(`201 Created — row added to ${targetEntity.name}`);
       return makeResponse(
@@ -250,7 +286,8 @@ export function executePlaygroundRequest(params: {
       );
     } catch (err: any) {
       const isConstraint =
-        err.message?.includes('violation') || err.message?.includes('cardinality');
+        err.message?.includes('violation') ||
+        err.message?.includes('cardinality');
       return makeResponse(
         isConstraint ? 409 : 400,
         isConstraint ? 'Conflict' : 'Bad Request',
@@ -258,7 +295,9 @@ export function executePlaygroundRequest(params: {
         {
           statusCode: isConstraint ? 409 : 400,
           status: isConstraint ? 'Conflict' : 'Bad Request',
-          error: isConstraint ? 'Database Constraint Violation' : 'Invalid Request Payload',
+          error: isConstraint
+            ? 'Database Constraint Violation'
+            : 'Invalid Request Payload',
           details: err.message,
         }
       );
@@ -269,7 +308,9 @@ export function executePlaygroundRequest(params: {
   if (methodType === 'PUT') {
     try {
       const parsed = JSON.parse(requestBodyText || '{}');
-      const idx = rows.findIndex((r) => String(r[pkFieldName] ?? r.id) === targetId);
+      const idx = rows.findIndex(
+        (r) => SeedEngine.getRowCompositeKey(targetEntity, r) === targetId
+      );
       if (idx === -1) {
         return makeResponse(
           404,
@@ -289,7 +330,12 @@ export function executePlaygroundRequest(params: {
         updated[k] = SeedEngine.coerceCellValue(fDef, v);
       });
 
-      SeedEngine.validateRowConstraints(present, targetEntity.name, updated, idx);
+      SeedEngine.validateRowConstraints(
+        present,
+        targetEntity.name,
+        updated,
+        idx
+      );
       rows[idx] = updated;
       setEntitySeedData(targetEntity.name, rows);
       showToast(`200 OK — updated record in ${targetEntity.name}`);
@@ -307,7 +353,8 @@ export function executePlaygroundRequest(params: {
       );
     } catch (err: any) {
       const isConstraint =
-        err.message?.includes('violation') || err.message?.includes('cardinality');
+        err.message?.includes('violation') ||
+        err.message?.includes('cardinality');
       return makeResponse(
         isConstraint ? 409 : 400,
         isConstraint ? 'Conflict' : 'Bad Request',
@@ -315,7 +362,9 @@ export function executePlaygroundRequest(params: {
         {
           statusCode: isConstraint ? 409 : 400,
           status: isConstraint ? 'Conflict' : 'Bad Request',
-          error: isConstraint ? 'Database Constraint Violation' : 'Invalid Request Payload',
+          error: isConstraint
+            ? 'Database Constraint Violation'
+            : 'Invalid Request Payload',
           details: err.message,
         }
       );
@@ -323,7 +372,9 @@ export function executePlaygroundRequest(params: {
   }
 
   // 5. DELETE
-  const idx = rows.findIndex((r) => String(r[pkFieldName] ?? r.id) === targetId);
+  const idx = rows.findIndex(
+    (r) => SeedEngine.getRowCompositeKey(targetEntity, r) === targetId
+  );
   if (idx === -1) {
     return makeResponse(
       404,
@@ -339,7 +390,11 @@ export function executePlaygroundRequest(params: {
 
   const deletedSnapshot = rows[idx];
   try {
-    const result = SeedEngine.deleteRowWithIntegrity(present, targetEntity.name, idx);
+    const result = SeedEngine.deleteRowWithIntegrity(
+      present,
+      targetEntity.name,
+      idx
+    );
     applyAIPatch(result.ir);
     showToast(`200 OK — ${result.message}`);
 
