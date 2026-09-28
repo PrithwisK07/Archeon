@@ -32,7 +32,7 @@ export function buildStudioFileMap(
           : f.type === 'json'
           ? 'Json'
           : 'String';
-      const pk = f.isPrimaryKey || f.name === 'id' ? ' @id @default(uuid())' : '';
+      const pk = (f.isPrimaryKey ?? f.name === 'id') ? ' @id @default(uuid())' : '';
       const uq = f.unique && !pk ? ' @unique' : '';
       const opt = f.nullable ? '?' : '';
       prismaCode += `  ${f.name} ${pType}${opt}${pk}${uq}\n`;
