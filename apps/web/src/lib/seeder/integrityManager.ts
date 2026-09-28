@@ -3,8 +3,11 @@ import type { CanonicalIR } from '@zero-dollar/ir-core';
 import {
   ResolvedRelation,
   SeedResult,
+  getEntityPkFields,
+  getRowCompositeKey,
   isFieldPk,
   resolveAllRelations,
+  resolveCompositeGroups,
 } from './relationResolver';
 import {
   coerceCellValue,
@@ -13,29 +16,61 @@ import {
 } from './valueGenerator';
 
 /**
- * Re-binds any orphaned FK values in existing child rows to valid parent PK values.
+ * Re-binds any orphaned single or composite FK values in existing child rows to valid parent rows.
  */
 export function reconcileAllForeignKeys(
   workingIR: CanonicalIR,
   resolvedRels = resolveAllRelations(workingIR)
 ): void {
-  for (const rel of resolvedRels) {
-    const parentEnt = workingIR.entities.find((e) => e.name === rel.parentEntity);
-    const childEnt = workingIR.entities.find((e) => e.name === rel.childEntity);
+  const activeRels = resolvedRels.filter((r) => r.isCompleteComposite);
+  const groups = resolveCompositeGroups(workingIR, activeRels).filter((g) => g.isComplete);
+
+  for (const group of groups) {
+    const parentEnt = workingIR.entities.find((e) => e.name === group.parentEntity);
+    const childEnt = workingIR.entities.find((e) => e.name === group.childEntity);
     if (!parentEnt?.seedData?.length || !childEnt?.seedData?.length) continue;
 
-    const validParentValues = parentEnt.seedData
-      .map((r) => r[rel.parentPkField] ?? r.id)
+    const parentRows = parentEnt.seedData;
+
+    // 1. Multi-Column Composite FK Reconciliation (atomic tuple matching)
+    if (group.mappings.length > 1) {
+      const validTuples = new Set(
+        parentRows.map((pRow) =>
+          group.mappings.map((m) => String(pRow[m.parentPkField] ?? '')).join('::')
+        )
+      );
+
+      childEnt.seedData = childEnt.seedData.map((cRow) => {
+        const childTuple = group.mappings
+          .map((m) => String(cRow[m.childFkField] ?? ''))
+          .join('::');
+
+        if (validTuples.has(childTuple)) return cRow;
+
+        const chosenParent = faker.helpers.arrayElement(parentRows);
+        const patched = { ...cRow };
+        group.mappings.forEach((m) => {
+          patched[m.childFkField] = chosenParent[m.parentPkField];
+        });
+        return patched;
+      });
+      continue;
+    }
+
+    // 2. Standard Single-Column FK Reconciliation
+    const mapping = group.mappings[0];
+    const validParentValues = parentRows
+      .map((r) => r[mapping.parentPkField] ?? r.id)
       .filter((v) => v !== undefined && v !== null);
     if (validParentValues.length === 0) continue;
 
     const validSet = new Set(validParentValues.map((v) => String(v)));
-    const fkFieldDef = childEnt.fields.find((f) => f.name === rel.childFkField);
+    const fkFieldDef = childEnt.fields.find((f) => f.name === mapping.childFkField);
 
     const usedInOneToOne = new Set<string>();
-    if (rel.type === 'ONE_TO_ONE') {
+    if (group.type === 'ONE_TO_ONE') {
       childEnt.seedData.forEach((r) => {
-        const val = r[rel.childFkField];
+        const val = r[mapping.childFkField];
         if (val !== undefined && val !== null && validSet.has(String(val))) {
           usedInOneToOne.add(String(val));
         }
@@ -43,25 +78,25 @@ export function reconcileAllForeignKeys(
     }
 
     childEnt.seedData = childEnt.seedData.map((row) => {
-      const currentFk = row[rel.childFkField];
+      const currentFk = row[mapping.childFkField];
       if (currentFk === null && fkFieldDef?.nullable) return row;
       if (currentFk !== undefined && currentFk !== null && validSet.has(String(currentFk))) {
         return row;
       }
 
-      if (rel.type === 'ONE_TO_ONE') {
+      if (group.type === 'ONE_TO_ONE') {
         const available = validParentValues.filter((v) => !usedInOneToOne.has(String(v)));
         const replacement =
           available.length > 0
             ? faker.helpers.arrayElement(available)
             : faker.helpers.arrayElement(validParentValues);
         usedInOneToOne.add(String(replacement));
-        return { ...row, [rel.childFkField]: replacement };
+        return { ...row, [mapping.childFkField]: replacement };
       }
 
       return {
         ...row,
-        [rel.childFkField]: faker.helpers.arrayElement(validParentValues),
+        [mapping.childFkField]: faker.helpers.arrayElement(validParentValues),
       };
     });
   }
@@ -75,6 +110,16 @@ export function synchronizeSchemaAndData(
   nextIR: CanonicalIR
 ): CanonicalIR {
   const syncedIR: CanonicalIR = JSON.parse(JSON.stringify(nextIR));
+  syncedIR.notes = nextIR.notes ?? prevIR.notes ?? [];
+  syncedIR.customSql = nextIR.customSql ?? prevIR.customSql ?? [];
+
+  for (const nextEnt of syncedIR.entities) {
+    const prevEnt = prevIR.entities.find((e) => e.name === nextEnt.name);
+    if (!nextEnt.seedData && prevEnt?.seedData) {
+      nextEnt.seedData = JSON.parse(JSON.stringify(prevEnt.seedData));
+    }
+  }
+
   const resolvedRels = resolveAllRelations(syncedIR);
 
   for (const nextEnt of syncedIR.entities) {
@@ -126,7 +171,8 @@ export function synchronizeSchemaAndData(
 }
 
 /**
- * Validates PK, @unique, 1:1 FK, NOT NULL, and Foreign Key constraints for a candidate row.
+ * Validates single & composite PKs, @unique columns, @@unique composite indexes,
+ * NOT NULL constraints, and single & composite Foreign Key existence.
  */
 export function validateRowConstraints(
   ir: CanonicalIR,
@@ -138,23 +184,35 @@ export function validateRowConstraints(
   if (!entity) return;
 
   const existingRows = (entity.seedData || []).filter((_, idx) => idx !== excludeRowIndex);
-  const resolvedRels = resolveAllRelations(ir);
+  const resolvedRels = resolveAllRelations(ir).filter((r) => r.isCompleteComposite);
   const incomingRels = resolvedRels.filter((r) => r.childEntity === entityName);
   const fkFieldSet = new Set(incomingRels.map((r) => r.childFkField));
 
+  const pkFields = getEntityPkFields(entity);
+  const isCompositePk = pkFields.length > 1;
+
+  // 1. Field-level NOT NULL & Single-Column Uniqueness
   for (const field of entity.fields) {
     const val = candidateRow[field.name];
     const isFk = fkFieldSet.has(field.name);
-    const isPk = !isFk && isFieldPk(field);
+    const isMemberOfPk = pkFields.includes(field.name);
+    const isSinglePk = !isCompositePk && !isFk && isFieldPk(field);
 
-    if (!field.nullable && (val === null || val === undefined || val === '')) {
+    // Primary keys (single or composite) can NEVER be null/empty
+    if ((!field.nullable || isMemberOfPk) && (val === null || val === undefined || val === '')) {
       throw new Error(`NOT NULL violation: "${entityName}.${field.name}" cannot be empty`);
     }
 
     if (val === null || val === undefined || val === '') continue;
 
-    const enforceUnique = isPk || (field.unique && !(isFk && field.name === 'id'));
-    if (enforceUnique) {
+    // Single-column uniqueness (skipped for composite PK columns unless explicitly marked @unique)
+    const hasSingleUniqueIndex = entity.indexes?.some(
+      (idx) => idx.unique && idx.fields.length === 1 && idx.fields[0] === field.name
+    );
+    const enforceSingleUnique =
+      isSinglePk || hasSingleUniqueIndex || (field.unique && !(isFk && field.name === 'id'));
+
+    if (enforceSingleUnique) {
       const duplicate = existingRows.some((r) => String(r[field.name]) === String(val));
       if (duplicate) {
         throw new Error(
@@ -164,39 +222,108 @@ export function validateRowConstraints(
     }
   }
 
-  for (const rel of incomingRels) {
-    const fkVal = candidateRow[rel.childFkField];
-    const fkFieldDef = entity.fields.find((f) => f.name === rel.childFkField);
+  // 2. Composite Primary Key (@@id) Tuple Uniqueness
+  if (isCompositePk) {
+    const candidateTuple = pkFields.map((k) => String(candidateRow[k] ?? '')).join('::');
+    const duplicatePkTuple = existingRows.some(
+      (r) => pkFields.map((k) => String(r[k] ?? '')).join('::') === candidateTuple
+    );
+    if (duplicatePkTuple) {
+      throw new Error(
+        `Composite Primary Key violation on "${entityName} (${pkFields.join(', ')})": tuple (${pkFields
+          .map((k) => candidateRow[k])
+          .join(', ')}) already exists`
+      );
+    }
+  }
 
-    if (fkVal === undefined || fkVal === null || fkVal === '') {
-      if (!fkFieldDef?.nullable) {
+  // 3. Composite Unique Indexes (@@unique) Tuple Uniqueness
+  for (const idx of entity.indexes || []) {
+    if (!idx.unique || idx.fields.length <= 1) continue;
+    // Skip if any indexed field in candidateRow is null (SQL allows multiple NULLs in unique indexes)
+    if (idx.fields.some((f) => candidateRow[f] === null || candidateRow[f] === undefined)) {
+      continue;
+    }
+    const candidateTuple = idx.fields.map((k) => String(candidateRow[k])).join('::');
+    const duplicateIdxTuple = existingRows.some(
+      (r) => idx.fields.map((k) => String(r[k])).join('::') === candidateTuple
+    );
+    if (duplicateIdxTuple) {
+      throw new Error(
+        `Composite Unique Index violation on "${entityName} (${idx.fields.join(', ')})": combination (${idx.fields
+          .map((k) => candidateRow[k])
+          .join(', ')}) already exists`
+      );
+    }
+  }
+
+  // 4. Single & Composite Foreign Key Validation
+  const incomingGroups = resolveCompositeGroups(ir, incomingRels).filter(
+    (g) => g.childEntity === entityName && g.isComplete
+  );
+
+  for (const group of incomingGroups) {
+    const parentEntity = ir.entities.find((e) => e.name === group.parentEntity);
+    if (!parentEntity) continue;
+    const parentRows = parentEntity.seedData || [];
+
+    if (group.mappings.length > 1) {
+      // Composite Foreign Key validation: all mapped columns must match the SAME parent row
+      const allNull = group.mappings.every(
+        (m) =>
+          candidateRow[m.childFkField] === null ||
+          candidateRow[m.childFkField] === undefined ||
+          candidateRow[m.childFkField] === ''
+      );
+      if (allNull) continue;
+
+      const existsTupleInParent = parentRows.some((pRow) =>
+        group.mappings.every(
+          (m) => String(pRow[m.parentPkField]) === String(candidateRow[m.childFkField])
+        )
+      );
+
+      if (!existsTupleInParent) {
+        const childCols = group.mappings.map((m) => m.childFkField).join(', ');
+        const parentCols = group.mappings.map((m) => m.parentPkField).join(', ');
+        const vals = group.mappings.map((m) => candidateRow[m.childFkField]).join(', ');
         throw new Error(
-          `Foreign key violation: "${entityName}.${rel.childFkField}" cannot be null`
+          `Composite Foreign Key violation on "${entityName} (${childCols})": tuple (${vals}) does not exist in "${group.parentEntity} (${parentCols})"`
         );
       }
       continue;
     }
 
-    const parentEntity = ir.entities.find((e) => e.name === rel.parentEntity);
-    if (!parentEntity) continue;
+    // Single-Column Foreign Key validation
+    const mapping = group.mappings[0];
+    const fkVal = candidateRow[mapping.childFkField];
+    const fkFieldDef = entity.fields.find((f) => f.name === mapping.childFkField);
 
-    const parentRows = parentEntity.seedData || [];
+    if (fkVal === undefined || fkVal === null || fkVal === '') {
+      if (!fkFieldDef?.nullable) {
+        throw new Error(
+          `Foreign key violation: "${entityName}.${mapping.childFkField}" cannot be null`
+        );
+      }
+      continue;
+    }
+
     const existsInParent = parentRows.some(
-      (r) => String(r[rel.parentPkField] ?? r.id) === String(fkVal)
+      (r) => String(r[mapping.parentPkField] ?? r.id) === String(fkVal)
     );
     if (!existsInParent) {
       throw new Error(
-        `Foreign key violation on "${entityName}.${rel.childFkField}": value "${fkVal}" does not exist in "${rel.parentEntity}.${rel.parentPkField}"`
+        `Foreign key violation on "${entityName}.${mapping.childFkField}": value "${fkVal}" does not exist in "${group.parentEntity}.${mapping.parentPkField}"`
       );
     }
 
-    if (rel.type === 'ONE_TO_ONE') {
+    if (group.type === 'ONE_TO_ONE') {
       const alreadyUsed = existingRows.some(
-        (r) => String(r[rel.childFkField]) === String(fkVal)
+        (r) => String(r[mapping.childFkField]) === String(fkVal)
       );
       if (alreadyUsed) {
         throw new Error(
-          `1:1 cardinality violation on "${entityName}.${rel.childFkField}": parent key "${fkVal}" is already linked to another row`
+          `1:1 cardinality violation on "${entityName}.${mapping.childFkField}": parent key "${fkVal}" is already linked to another row`
         );
       }
     }
@@ -231,7 +358,10 @@ export function updateCellWithIntegrity(
   // ON UPDATE CASCADE for referencing child rows
   if (oldValue !== undefined && oldValue !== '' && coercedValue !== '') {
     const outgoingRels = resolveAllRelations(workingIR).filter(
-      (r) => r.parentEntity === entityName && r.parentPkField === fieldName
+      (r) =>
+        r.isCompleteComposite &&
+        r.parentEntity === entityName &&
+        r.parentPkField === fieldName
     );
     for (const rel of outgoingRels) {
       const childEnt = workingIR.entities.find((e) => e.name === rel.childEntity);
@@ -287,14 +417,13 @@ export function clearTableWithIntegrity(ir: CanonicalIR, entityName: string): Se
   let totalCascaded = 0;
 
   for (const row of originalRows) {
-    // Test deleting this individual row on a snapshot so partial failures don't corrupt state
     const snapshotIR: CanonicalIR = JSON.parse(JSON.stringify(workingIR));
     try {
       const snapEnt = snapshotIR.entities.find((e) => e.name === entityName)!;
-      const keyField = snapEnt.fields.find((f) => isFieldPk(f))?.name || 'id';
+      const targetRowKey = getRowCompositeKey(snapEnt, row);
 
       snapEnt.seedData = (snapEnt.seedData || []).filter(
-        (r) => String(r[keyField] ?? r.id) !== String(row[keyField] ?? row.id)
+        (r) => getRowCompositeKey(snapEnt, r) !== targetRowKey
       );
 
       const cascaded = applyReferentialDeleteActions(
@@ -308,7 +437,6 @@ export function clearTableWithIntegrity(ir: CanonicalIR, entityName: string): Se
       deletedCount++;
       totalCascaded += cascaded;
     } catch {
-      // Row is locked by a child RESTRICT constraint — keep it
       keptRows.push(row);
     }
   }
@@ -340,35 +468,50 @@ function applyReferentialDeleteActions(
   deletingRows: Record<string, any>[]
 ): number {
   let totalCascaded = 0;
-  const outgoingRels = resolvedRels.filter((r) => r.parentEntity === entityName);
+  const activeRels = resolvedRels.filter((r) => r.isCompleteComposite);
+  const outgoingGroups = resolveCompositeGroups(workingIR, activeRels).filter(
+    (g) => g.parentEntity === entityName && g.isComplete
+  );
 
-  for (const rel of outgoingRels) {
-    const childEntity = workingIR.entities.find((e) => e.name === rel.childEntity);
+  for (const group of outgoingGroups) {
+    const childEntity = workingIR.entities.find((e) => e.name === group.childEntity);
     if (!childEntity || !childEntity.seedData?.length) continue;
 
-    const deletingKeySet = new Set(
-      deletingRows.map((r) => String(r[rel.parentPkField] ?? r.id))
+    // Match child rows that reference ANY of the deleting parent rows across all mapped key columns
+    const deletingTupleSet = new Set(
+      deletingRows.map((pRow) =>
+        group.mappings.map((m) => String(pRow[m.parentPkField] ?? pRow.id)).join('::')
+      )
     );
-    const dependentRows = childEntity.seedData.filter(
-      (r) =>
-        r[rel.childFkField] !== null &&
-        r[rel.childFkField] !== undefined &&
-        deletingKeySet.has(String(r[rel.childFkField]))
-    );
+
+    const isChildRowDependent = (cRow: Record<string, any>): boolean => {
+      if (
+        group.mappings.some(
+          (m) => cRow[m.childFkField] === null || cRow[m.childFkField] === undefined
+        )
+      ) {
+        return false;
+      }
+      const childTuple = group.mappings
+        .map((m) => String(cRow[m.childFkField]))
+        .join('::');
+      return deletingTupleSet.has(childTuple);
+    };
+
+    const dependentRows = childEntity.seedData.filter(isChildRowDependent);
     if (dependentRows.length === 0) continue;
 
-    const rule = rel.onDelete || 'RESTRICT';
-    const fkFieldDef = childEntity.fields.find((f) => f.name === rel.childFkField);
+    const rule = group.onDelete || 'RESTRICT';
+    const childColsLabel = group.mappings.map((m) => m.childFkField).join(', ');
+    const parentColsLabel = group.mappings.map((m) => m.parentPkField).join(', ');
 
     if (rule === 'RESTRICT') {
       throw new Error(
-        `Foreign key constraint violation: ${dependentRows.length} row(s) in "${childEntity.name}.${rel.childFkField}" reference "${entityName}.${rel.parentPkField}" (RESTRICT)`
+        `Foreign key constraint violation: ${dependentRows.length} row(s) in "${childEntity.name} (${childColsLabel})" reference "${entityName} (${parentColsLabel})" (RESTRICT)`
       );
     } else if (rule === 'CASCADE') {
       totalCascaded += dependentRows.length;
-      childEntity.seedData = childEntity.seedData.filter(
-        (r) => !deletingKeySet.has(String(r[rel.childFkField]))
-      );
+      childEntity.seedData = childEntity.seedData.filter((r) => !isChildRowDependent(r));
       totalCascaded += applyReferentialDeleteActions(
         workingIR,
         resolvedRels,
@@ -376,23 +519,33 @@ function applyReferentialDeleteActions(
         dependentRows
       );
     } else if (rule === 'SET NULL') {
-      if (fkFieldDef && !fkFieldDef.nullable) {
-        throw new Error(
-          `Cannot SET NULL on non-nullable column "${childEntity.name}.${rel.childFkField}"`
-        );
+      for (const m of group.mappings) {
+        const fkFieldDef = childEntity.fields.find((f) => f.name === m.childFkField);
+        const childPkFields = getEntityPkFields(childEntity);
+        if ((fkFieldDef && !fkFieldDef.nullable) || childPkFields.includes(m.childFkField)) {
+          throw new Error(
+            `Cannot SET NULL on non-nullable or Primary Key column "${childEntity.name}.${m.childFkField}"`
+          );
+        }
       }
-      childEntity.seedData = childEntity.seedData.map((r) =>
-        deletingKeySet.has(String(r[rel.childFkField]))
-          ? { ...r, [rel.childFkField]: null }
-          : r
-      );
+      childEntity.seedData = childEntity.seedData.map((r) => {
+        if (!isChildRowDependent(r)) return r;
+        const patched = { ...r };
+        group.mappings.forEach((m) => {
+          patched[m.childFkField] = null;
+        });
+        return patched;
+      });
     } else if (rule === 'SET DEFAULT') {
-      const fallbackVal = fkFieldDef ? evaluateDefaultValue(fkFieldDef) : null;
-      childEntity.seedData = childEntity.seedData.map((r) =>
-        deletingKeySet.has(String(r[rel.childFkField]))
-          ? { ...r, [rel.childFkField]: fallbackVal }
-          : r
-      );
+      childEntity.seedData = childEntity.seedData.map((r) => {
+        if (!isChildRowDependent(r)) return r;
+        const patched = { ...r };
+        group.mappings.forEach((m) => {
+          const fkFieldDef = childEntity.fields.find((f) => f.name === m.childFkField);
+          patched[m.childFkField] = fkFieldDef ? evaluateDefaultValue(fkFieldDef) : null;
+        });
+        return patched;
+      });
     }
   }
 

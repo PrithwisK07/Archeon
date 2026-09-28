@@ -1,9 +1,14 @@
 import type { CanonicalIR } from '@zero-dollar/ir-core';
 import {
+  CompositeRelationGroup,
   ResolvedRelation,
   SeedResult,
+  getEntityPkFields,
+  getIncompleteCompositeRelations,
+  getRowCompositeKey,
   isFieldPk,
   resolveAllRelations,
+  resolveCompositeGroups,
 } from './seeder/relationResolver';
 import { coerceCellValue, createBlankRow } from './seeder/valueGenerator';
 import { generateRowsForEntity } from './seeder/rowGenerator';
@@ -16,11 +21,21 @@ import {
   validateRowConstraints,
 } from './seeder/integrityManager';
 
-export { isFieldPk };
-export type { SeedResult, ResolvedRelation };
+export {
+  isFieldPk,
+  getEntityPkFields,
+  getRowCompositeKey,
+  resolveCompositeGroups,
+  getIncompleteCompositeRelations,
+};
+export type { SeedResult, ResolvedRelation, CompositeRelationGroup };
 
 export class SeedEngine {
   public static resolveAllRelations = resolveAllRelations;
+  public static resolveCompositeGroups = resolveCompositeGroups;
+  public static getIncompleteCompositeRelations = getIncompleteCompositeRelations;
+  public static getEntityPkFields = getEntityPkFields;
+  public static getRowCompositeKey = getRowCompositeKey;
   public static createBlankRow = createBlankRow;
   public static coerceCellValue = coerceCellValue;
   public static reconcileAllForeignKeys = reconcileAllForeignKeys;
