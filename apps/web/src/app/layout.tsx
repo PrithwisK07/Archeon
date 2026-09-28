@@ -16,7 +16,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Nexus — Visual Schema Studio',
+  title: 'Archeon — Visual Schema Studio',
   description: 'Design schemas, routes and relationships on a live canvas — compiled straight into a production-ready API.',
 };
 

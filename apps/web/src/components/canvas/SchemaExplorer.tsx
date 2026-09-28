@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { useArchitectureStore } from '../../store/architectureStore';
-import { NEXUS_COLORS, NexusColorKey } from '../../lib/reactFlowAdapter';
+import { NEXUS_COLORS, ArcheonColorKey } from '../../lib/reactFlowAdapter';
 import type { CustomSqlSnippet } from '@zero-dollar/ir-core';
 
-const PALETTE_KEYS: NexusColorKey[] = ['violet', 'cyan', 'amber', 'rose', 'lime'];
+const PALETTE_KEYS: ArcheonColorKey[] = ['violet', 'cyan', 'amber', 'rose', 'lime'];
 
 export function SchemaExplorer() {
   const {

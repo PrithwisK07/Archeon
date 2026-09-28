@@ -16,6 +16,7 @@ const DEFAULT_IR: CanonicalIR = {
   enums: [],
   endpoints: [],
   customSql: [],
+  notes: [],
 };
 
 const generateHash = (data: any): string => {
@@ -139,6 +140,15 @@ interface ArchitectureState {
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
+const normalizeNotes = (rawNotes?: any[]): StickyNote[] =>
+  (rawNotes || []).map((n, i) => ({
+    id: n.id || `note_${Date.now()}_${i}`,
+    x: typeof n.x === 'number' ? n.x : 220,
+    y: typeof n.y === 'number' ? n.y : 160,
+    text: n.text ?? '',
+    color: n.color || 'yellow',
+  }));
+
 export const useArchitectureStore = create<ArchitectureState>((set, get) => {
   const syncUINodes = (newIR: CanonicalIR, currentNodes: Node<UINodeData>[]) => {
     const nodeMap = new Map(currentNodes.map((n) => [n.id, n]));
@@ -224,11 +234,20 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
       }),
 
     setEntitySeedData: (entityName, rows) => {
-      const { present, applyAIPatch } = get();
-      const newEntities = present.entities.map((ent) =>
-        ent.name === entityName ? { ...ent, seedData: rows } : ent
-      );
-      applyAIPatch({ ...present, entities: newEntities });
+      const { present, projectId, nodes } = get();
+      const newIR: CanonicalIR = {
+        ...present,
+        entities: present.entities.map((ent) =>
+          ent.name === entityName ? { ...ent, seedData: rows } : ent
+        ),
+      };
+      set({
+        present: newIR,
+        nodes: syncUINodes(newIR, nodes),
+        isDirty: true,
+        syncStatus: 'syncing',
+      });
+      if (projectId) persistToDB(projectId, newIR);
     },
 
     seedTableData: (entityName, count = 5) => {
@@ -296,8 +315,16 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
     setCanvasMode: (mode) => set({ canvasMode: mode }),
 
     addNote: () => {
-      const palette: StickyNoteColor[] = ['yellow', 'amber', 'rose', 'violet', 'cyan', 'lime'];
-      const currentNotes = get().notes;
+      const { present, projectId, showToast } = get();
+      const palette: StickyNoteColor[] = [
+        'yellow',
+        'amber',
+        'rose',
+        'violet',
+        'cyan',
+        'lime',
+      ];
+      const currentNotes = normalizeNotes(present.notes);
       const nextColor = palette[currentNotes.length % palette.length];
 
       const newNote: StickyNote = {
@@ -307,18 +334,60 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
         text: 'New note — click to edit',
         color: nextColor,
       };
-      set((state) => ({ notes: [...state.notes, newNote] }));
-      get().showToast('Note added to canvas');
+
+      const nextNotes: StickyNote[] = [...currentNotes, newNote];
+      const newIR: CanonicalIR = {
+        ...present,
+        notes: nextNotes as any,
+      };
+
+      set({
+        present: newIR,
+        notes: nextNotes,
+        isDirty: true,
+        syncStatus: 'syncing',
+      });
+      if (projectId) persistToDB(projectId, newIR);
+      showToast('Note added to canvas');
     },
 
-    updateNote: (id, patch) =>
-      set((state) => ({
-        notes: state.notes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
-      })),
+    updateNote: (id: string, patch: Partial<StickyNote>) => {
+      const { present, projectId } = get();
+      const currentNotes = normalizeNotes(present.notes);
+      const nextNotes: StickyNote[] = currentNotes.map((n) =>
+        n.id === id ? { ...n, ...patch } : n
+      );
+      const newIR: CanonicalIR = {
+        ...present,
+        notes: nextNotes as any,
+      };
 
-    deleteNote: (id) => {
-      set((state) => ({ notes: state.notes.filter((n) => n.id !== id) }));
-      get().showToast('Note deleted');
+      set({
+        present: newIR,
+        notes: nextNotes,
+        isDirty: true,
+        syncStatus: 'syncing',
+      });
+      if (projectId) persistToDB(projectId, newIR);
+    },
+
+    deleteNote: (id: string) => {
+      const { present, projectId, showToast } = get();
+      const currentNotes = normalizeNotes(present.notes);
+      const nextNotes: StickyNote[] = currentNotes.filter((n) => n.id !== id);
+      const newIR: CanonicalIR = {
+        ...present,
+        notes: nextNotes as any,
+      };
+
+      set({
+        present: newIR,
+        notes: nextNotes,
+        isDirty: true,
+        syncStatus: 'syncing',
+      });
+      if (projectId) persistToDB(projectId, newIR);
+      showToast('Note deleted');
     },
 
     showToast: (msg) => {
@@ -360,11 +429,16 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
     setSyncStatus: (status) => set({ syncStatus: status }),
 
     loadProjectState: (ir, chatHistory, repoUrl, name) => {
+      const safeNotes = normalizeNotes(ir?.notes);
       const safeIR: CanonicalIR = JSON.parse(
-        JSON.stringify({ ...DEFAULT_IR, ...(ir || {}), customSql: ir?.customSql || [] })
+        JSON.stringify({
+          ...DEFAULT_IR,
+          ...(ir || {}),
+          customSql: ir?.customSql || [],
+          notes: safeNotes || [],
+        })
       );
 
-      // Clean up any dangling relations pointing to deleted fields & demote PK->PK targets once on load
       safeIR.relations = safeIR.relations.filter((rel) => {
         const sEnt = safeIR.entities.find((e) => e.name === rel.sourceEntity);
         const tEnt = safeIR.entities.find((e) => e.name === rel.targetEntity);
@@ -389,6 +463,7 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
       set({
         present: safeIR,
         nodes: ReactFlowAdapter.generateNodes(safeIR),
+        notes: safeNotes,
         past: [],
         future: [],
         isDirty: false,
@@ -555,13 +630,15 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
     initializeProject: async (projectId: string) => {
       try {
         const localData = await db.projects.get(projectId);
-        const ir = { ...(localData ? localData.canonical_ir : DEFAULT_IR), customSql: localData?.canonical_ir?.customSql || [] };
+        const ir = { ...(localData ? localData.canonical_ir : DEFAULT_IR), customSql: localData?.canonical_ir?.customSql || [], notes: localData?.canonical_ir?.notes || [] };
+        const safeNotes = normalizeNotes(ir.notes);
         set({
           projectId,
           projectName: 'untitled-workspace',
           present: ir,
           past: [],
           future: [],
+          notes: safeNotes,
           nodes: syncUINodes(ir, []),
           chatHistory: [],
           isDirty: false,
@@ -575,10 +652,16 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
 
     applyAIPatch: (newIR: CanonicalIR) => {
       const { present, projectId, past, nodes } = get();
-      const safeIR = { ...newIR, customSql: newIR.customSql || [] };
+      const safeNotes = normalizeNotes(newIR.notes ?? present.notes);
+      const safeIR: CanonicalIR = {
+        ...newIR,
+        customSql: newIR.customSql ?? present.customSql ?? [],
+        notes: safeNotes,
+      };
       set({
         past: [...past, present].slice(-50),
         present: safeIR,
+        notes: safeNotes,
         future: [],
         nodes: syncUINodes(safeIR, nodes),
         isDirty: true,

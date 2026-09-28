@@ -136,7 +136,7 @@ export default function Dashboard() {
             </svg>
           </div>
           <div className="flex flex-col items-center gap-1">
-            <span className="text-[13px] font-semibold tracking-[0.2px]">Nexus</span>
+            <span className="text-[13px] font-semibold tracking-[0.2px]">Archeon</span>
             <span className="text-[11px] text-[#8a8b9a] font-mono">Loading workspaces…</span>
           </div>
         </div>
@@ -155,7 +155,7 @@ export default function Dashboard() {
               <circle cx="12" cy="12" r="2.3" fill="#e08a3c" />
             </svg>
           </span>
-          Nexus
+          Archeon
         </div>
 
         <div className="flex-1" />

@@ -39,7 +39,7 @@ export function StudioTopbar({
             <circle cx="12" cy="12" r="2.3" fill="#e08a3c" />
           </svg>
         </span>
-        Nexus
+        Archeon
       </div>
 
       {/* Breadcrumbs & Live Cloud Sync Indicator */}

@@ -60,7 +60,7 @@ export function buildStudioFileMap(
 
   files['src/server.ts'] =
     compiledFiles?.['src/index.ts'] ||
-    `import express from "express";\n${entityImports}\n\nconst app = express();\napp.use(express.json());\n\n${entityMounts}\n\nconst PORT = process.env.PORT || 3000;\napp.listen(PORT, () => {\n  console.log(\`Nexus API running on port \${PORT}\`);\n});\n`;
+    `import express from "express";\n${entityImports}\n\nconst app = express();\napp.use(express.json());\n\n${entityMounts}\n\nconst PORT = process.env.PORT || 3000;\napp.listen(PORT, () => {\n  console.log(\`Archeon API running on port \${PORT}\`);\n});\n`;
 
   files['src/lib/prisma.ts'] = `import { PrismaClient } from "@prisma/client";\n\nexport const prisma = new PrismaClient();\n`;
 
