@@ -1,182 +1,190 @@
-import { memo, useState } from 'react';
-import { EdgeLabelRenderer, EdgeProps, getBezierPath } from 'reactflow';
+import { memo } from 'react';
+import {
+  EdgeProps,
+  EdgeLabelRenderer,
+  getSmoothStepPath,
+} from 'reactflow';
 import { useArchitectureStore } from '../../store/architectureStore';
+import { SeedEngine } from '../../lib/seedEngine';
 import type { UIEdgeData } from '../../lib/reactFlowAdapter';
 import type { Relation } from '@zero-dollar/ir-core';
 
-const CARDINALITY_OPTIONS = [
-  { value: 'ONE_TO_ONE', label: '1:1' },
-  { value: 'ONE_TO_MANY', label: '1:N' },
-  { value: 'MANY_TO_MANY', label: 'M:N' },
-] as const;
+const FALLBACK_COLORS = [
+  '#e08a3c', // amber
+  '#8b7ff0', // violet
+  '#3fc6d8', // cyan
+  '#e0708f', // rose
+  '#8fbf6b', // lime
+];
+
+const CARDINALITY_SHORT: Record<Relation['type'], string> = {
+  ONE_TO_ONE: '1:1',
+  ONE_TO_MANY: '1:N',
+  MANY_TO_MANY: 'N:M',
+};
 
 export const RelationEdge = memo(
   ({
     id,
+    source,
+    target,
+    sourceHandleId,
+    targetHandleId,
     sourceX,
     sourceY,
     targetX,
     targetY,
     sourcePosition,
     targetPosition,
-    selected,
     data,
+    selected,
   }: EdgeProps<UIEdgeData>) => {
-    const dispatchManualAction = useArchitectureStore((s) => s.dispatchManualAction);
-    const showToast = useArchitectureStore((s) => s.showToast);
-    const [hovered, setHovered] = useState(false);
+    const {
+      present,
+      openInspector,
+      autoWireCompositeRelation,
+    } = useArchitectureStore();
 
-    const [edgePath, labelX, labelY] = getBezierPath({
+    const [edgePath, labelX, labelY] = getSmoothStepPath({
       sourceX,
       sourceY,
       sourcePosition,
+      targetPosition,
       targetX,
       targetY,
-      targetPosition,
+      borderRadius: 12,
     });
 
-    const relation = data?.relation;
-    const strokeColor = data?.colorHex || '#8b7ff0';
+    const handleSrcField = sourceHandleId?.replace(/^source-/, '');
+    const handleTgtField = targetHandleId?.replace(/^target-/, '');
 
-    if (!relation) return null;
+    const relIndex = present.relations.findIndex(
+      (r) =>
+        r.sourceEntity === source &&
+        r.targetEntity === target &&
+        (!handleSrcField || !r.sourceField || r.sourceField === handleSrcField) &&
+        (!handleTgtField || !r.targetField || r.targetField === handleTgtField)
+    );
 
-    const handleCardinalityChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-      dispatchManualAction({
-        action: 'UPDATE_RELATION',
-        sourceEntity: relation.sourceEntity,
-        targetEntity: relation.targetEntity,
-        sourceField: relation.sourceField,
-        targetField: relation.targetField,
-        payload: { type: e.target.value as Relation['type'] },
-      });
-    };
+    const relation: Relation | undefined =
+      data?.relation ||
+      (relIndex !== -1 ? present.relations[relIndex] : undefined) ||
+      present.relations.find(
+        (r) => r.sourceEntity === source && r.targetEntity === target
+      );
 
-    const handleOnDeleteChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-      dispatchManualAction({
-        action: 'UPDATE_RELATION',
-        sourceEntity: relation.sourceEntity,
-        targetEntity: relation.targetEntity,
-        sourceField: relation.sourceField,
-        targetField: relation.targetField,
-        payload: { onDelete: e.target.value as Relation['onDelete'] },
-      });
-    };
+    const resolvedAll = SeedEngine.resolveAllRelations(present);
+    const resolvedRel = resolvedAll.find(
+      (r) =>
+        r.rawRelation.sourceEntity === (relation?.sourceEntity ?? source) &&
+        r.rawRelation.targetEntity === (relation?.targetEntity ?? target) &&
+        (r.rawRelation.sourceField === relation?.sourceField ||
+          r.parentPkField === handleSrcField) &&
+        (r.rawRelation.targetField === relation?.targetField ||
+          r.childFkField === handleTgtField)
+    );
 
-    const handleDelete = (e: React.MouseEvent) => {
+    const isIncompleteComposite =
+      resolvedRel !== undefined && !resolvedRel.isCompleteComposite;
+
+    const baseColor =
+      data?.colorHex ||
+      FALLBACK_COLORS[
+        Math.abs(relIndex !== -1 ? relIndex : id.length) % FALLBACK_COLORS.length
+      ];
+
+    const strokeColor = isIncompleteComposite ? '#e08a3c' : baseColor;
+
+    // Clicking the wire or badge opens the right-hand Inspector for the child FK column
+    const handleOpenInSidebar = (e: React.MouseEvent) => {
       e.stopPropagation();
-      dispatchManualAction({
-        action: 'REMOVE_RELATION',
-        sourceEntity: relation.sourceEntity,
-        targetEntity: relation.targetEntity,
-        sourceField: relation.sourceField,
-        targetField: relation.targetField,
-      });
-      showToast('Relationship removed');
+      if (resolvedRel) {
+        openInspector(resolvedRel.childEntity, resolvedRel.childFkField);
+        return;
+      }
+      const targetEnt = present.entities.find((ent) => ent.name === target);
+      const fieldToInspect =
+        relation?.targetField ||
+        handleTgtField ||
+        targetEnt?.fields[0]?.name;
+      if (target && fieldToInspect) {
+        openInspector(target, fieldToInspect);
+      }
     };
-
-    const showControls = hovered || selected;
 
     return (
       <>
-        <g
-          onMouseEnter={() => setHovered(true)}
-          onMouseLeave={() => setHovered(false)}
-          className="cursor-pointer"
-        >
-          {/* Invisible wider hit area for smooth hovering */}
-          <path d={edgePath} fill="none" stroke="transparent" strokeWidth={18} />
+        {/* Wider invisible click target */}
+        <path
+          d={edgePath}
+          fill="none"
+          stroke="transparent"
+          strokeWidth={16}
+          onClick={handleOpenInSidebar}
+          className="react-flow__edge-interaction cursor-pointer"
+        />
 
-          {/* Outer Soft Glow */}
-          <path
-            d={edgePath}
-            fill="none"
-            stroke={strokeColor}
-            strokeWidth={selected || hovered ? 7 : 5}
-            style={{
-              opacity: selected || hovered ? 0.2 : 0.09,
-              filter: 'blur(1px)',
-              transition: 'opacity 0.15s, stroke-width 0.15s',
-            }}
-          />
+        {/* Clean Stepped Edge Path (No glow) */}
+        <path
+          id={id}
+          d={edgePath}
+          fill="none"
+          stroke={strokeColor}
+          strokeWidth={selected ? 2.2 : 1.65}
+          strokeOpacity={selected ? 1 : 0.78}
+          strokeDasharray={isIncompleteComposite ? '6 4' : undefined}
+          onClick={handleOpenInSidebar}
+          className="transition-colors duration-150 cursor-pointer"
+        />
 
-          {/* Main Crisp Bezier Path */}
-          <path
-            id={id}
-            d={edgePath}
-            fill="none"
-            stroke={strokeColor}
-            strokeWidth={selected || hovered ? 2.1 : 1.6}
-            style={{
-              opacity: selected || hovered ? 0.95 : 0.75,
-              transition: 'opacity 0.15s, stroke-width 0.15s',
-            }}
-          />
-
-          {/* Endpoint Dots */}
-          <circle cx={sourceX} cy={sourceY} r={3} fill={strokeColor} />
-          <circle cx={targetX} cy={targetY} r={3} fill={strokeColor} />
-        </g>
+        {/* Endpoint Dots */}
+        <circle cx={sourceX} cy={sourceY} r={3} fill={strokeColor} />
+        <circle cx={targetX} cy={targetY} r={3} fill={strokeColor} />
 
         <EdgeLabelRenderer>
           <div
-            onMouseEnter={() => setHovered(true)}
-            onMouseLeave={() => setHovered(false)}
-            onMouseDown={(e) => e.stopPropagation()}
             style={{
               position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-              pointerEvents: showControls ? 'all' : 'none',
+              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+              pointerEvents: 'all',
+              borderColor: selected
+                ? strokeColor
+                : 'rgba(255, 255, 255, 0.09)',
             }}
-            className={`nodrag nopan flex items-center gap-1 bg-[#14161d]/95 backdrop-blur-md border border-white/[0.12] rounded-full px-2 py-0.5 shadow-xl transition-opacity duration-150 ${
-              showControls ? 'opacity-100' : 'opacity-0'
-            }`}
+            onClick={handleOpenInSidebar}
+            title="Click to configure relation in sidebar"
+            className="nodrag nopan flex items-center gap-1.5 bg-[#14161d] hover:bg-[#1a1d26] border rounded-full px-2 py-0.5 text-[9.5px] font-mono text-[#e8e8ee] cursor-pointer transition-colors"
           >
-            {/* Cardinality Select */}
-            <select
-              value={relation.type}
-              onChange={handleCardinalityChange}
-              className="bg-transparent text-[10px] font-mono font-semibold text-[#8b7ff0] outline-none cursor-pointer"
-              title="Relationship Cardinality"
-            >
-              {CARDINALITY_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value} className="bg-[#14161d] text-[#e8e8ee]">
-                  {opt.label}
-                </option>
-              ))}
-            </select>
+            <span
+              className="w-1.5 h-1.5 rounded-full flex-none"
+              style={{ backgroundColor: strokeColor }}
+            />
 
-            <span className="text-white/15 text-[10px]">·</span>
-
-            {/* OnDelete Cascade Rule Select */}
-            <select
-              value={relation.onDelete || 'RESTRICT'}
-              onChange={handleOnDeleteChange}
-              className="bg-transparent text-[9.5px] font-mono text-[#e08a3c] outline-none cursor-pointer"
-              title="On Delete Behavior"
-            >
-              <option value="RESTRICT" className="bg-[#14161d] text-[#e8e8ee]">
-                RESTRICT
-              </option>
-              <option value="CASCADE" className="bg-[#14161d] text-[#e8e8ee]">
-                CASCADE
-              </option>
-              <option value="SET NULL" className="bg-[#14161d] text-[#e8e8ee]">
-                SET NULL
-              </option>
-              <option value="SET DEFAULT" className="bg-[#14161d] text-[#e8e8ee]">
-                SET DEFAULT
-              </option>
-            </select>
-
-            {/* Delete Relation Button */}
-            <button
-              type="button"
-              onClick={handleDelete}
-              className="ml-0.5 w-3.5 h-3.5 rounded-full text-[#8a8b9a] hover:text-[#e0708f] hover:bg-[#e0708f]/15 flex items-center justify-center text-[11px] leading-none cursor-pointer"
-              title="Delete relation"
-            >
-              ✕
-            </button>
+            {isIncompleteComposite && resolvedRel ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  autoWireCompositeRelation(
+                    resolvedRel.parentEntity,
+                    resolvedRel.childEntity
+                  );
+                }}
+                title={`Missing composite key field(s): ${resolvedRel.missingParentPkFields.join(
+                  ', '
+                )}. Click to auto-wire.`}
+                className="flex items-center gap-1 text-[#e08a3c] font-semibold cursor-pointer"
+              >
+                <span>⚠️ 1/{resolvedRel.missingParentPkFields.length + 1} PK</span>
+                <span className="bg-[#e08a3c] text-[#1a1206] px-1 rounded-full text-[8.5px]">
+                  Fix
+                </span>
+              </button>
+            ) : (
+              <span style={{ color: strokeColor }} className="font-semibold">
+                {relation ? CARDINALITY_SHORT[relation.type] : '1:N'}
+              </span>
+            )}
           </div>
         </EdgeLabelRenderer>
       </>

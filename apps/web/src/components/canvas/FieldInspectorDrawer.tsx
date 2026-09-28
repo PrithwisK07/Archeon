@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useArchitectureStore } from '../../store/architectureStore';
 import { SeedEngine } from '../../lib/seedEngine';
-import type { Field } from '@zero-dollar/ir-core';
+import type { Field, Relation } from '@zero-dollar/ir-core';
 
 const PG_TYPE_OPTIONS: { label: string; irType: Field['type'] }[] = [
   { label: 'uuid', irType: 'uuid' },
@@ -18,7 +18,9 @@ export function FieldInspectorDrawer() {
     inspectorTarget,
     closeInspector,
     dispatchManualAction,
+    applyAIPatch,
     updateEntityIndexes,
+    autoWireCompositeRelation,
     showToast,
   } = useArchitectureStore();
 
@@ -54,6 +56,19 @@ export function FieldInspectorDrawer() {
     setNewIdxUnique(false);
   }, [inspectorTarget?.entityName]);
 
+  // Find all relations where this field is either the child FK or the parent PK
+  const fieldRelations = useMemo(() => {
+    if (!inspectedEntity || !inspectedField) return [];
+    const resolved = SeedEngine.resolveAllRelations(present);
+    return resolved.filter(
+      (r) =>
+        (r.childEntity === inspectedEntity.name &&
+          r.childFkField === inspectedField.name) ||
+        (r.parentEntity === inspectedEntity.name &&
+          r.parentPkField === inspectedField.name)
+    );
+  }, [present, inspectedEntity, inspectedField]);
+
   const commitFieldRename = () => {
     if (!inspectorTarget || !inspectedField) return;
     const clean = localFieldName.trim().replace(/[^a-zA-Z0-9_]/g, '_');
@@ -78,6 +93,66 @@ export function FieldInspectorDrawer() {
       targetField: inspectedField.name,
       payload: { defaultValue: trimmed === '' ? undefined : trimmed },
     });
+  };
+
+  const handleUpdateRelation = (
+    rawRel: Relation,
+    patch: { type?: Relation['type']; onDelete?: NonNullable<Relation['onDelete']> }
+  ) => {
+    const nextType = patch.type ?? rawRel.type;
+    const nextOnDelete = patch.onDelete ?? rawRel.onDelete ?? 'RESTRICT';
+
+    if (nextOnDelete === 'SET NULL') {
+      const resolved = fieldRelations.find((r) => r.rawRelation === rawRel);
+      if (resolved) {
+        const childEnt = present.entities.find(
+          (ent) => ent.name === resolved.childEntity
+        );
+        const fkField = childEnt?.fields.find(
+          (f) => f.name === resolved.childFkField
+        );
+        const childPks = childEnt ? SeedEngine.getEntityPkFields(childEnt) : [];
+        if (
+          (fkField && !fkField.nullable) ||
+          childPks.includes(resolved.childFkField)
+        ) {
+          showToast(
+            `Cannot use SET NULL: "${resolved.childEntity}.${resolved.childFkField}" is NOT NULL`
+          );
+          return;
+        }
+      }
+    }
+
+    const nextRelations = present.relations.map((r) =>
+      r.sourceEntity === rawRel.sourceEntity &&
+      r.targetEntity === rawRel.targetEntity &&
+      r.sourceField === rawRel.sourceField &&
+      r.targetField === rawRel.targetField
+        ? { ...r, type: nextType, onDelete: nextOnDelete }
+        : r
+    );
+
+    const syncedIR = SeedEngine.synchronizeSchemaAndData(present, {
+      ...present,
+      relations: nextRelations,
+    });
+    applyAIPatch(syncedIR);
+    showToast('Relation updated');
+  };
+
+  const handleRemoveRelation = (rawRel: Relation) => {
+    const nextRelations = present.relations.filter(
+      (r) =>
+        !(
+          r.sourceEntity === rawRel.sourceEntity &&
+          r.targetEntity === rawRel.targetEntity &&
+          r.sourceField === rawRel.sourceField &&
+          r.targetField === rawRel.targetField
+        )
+    );
+    applyAIPatch({ ...present, relations: nextRelations });
+    showToast('Relation removed');
   };
 
   const handleAddIndex = () => {
@@ -121,7 +196,9 @@ export function FieldInspectorDrawer() {
     <div className="flex items-center justify-between py-[9px] text-[12.5px] border-b border-white/[0.05]">
       <div className="flex flex-col">
         <span className={disabled ? 'text-[#565766]' : ''}>{label}</span>
-        {hint && <span className="text-[10px] font-mono text-[#565766]">{hint}</span>}
+        {hint && (
+          <span className="text-[10px] font-mono text-[#565766]">{hint}</span>
+        )}
       </div>
       <button
         type="button"
@@ -143,7 +220,8 @@ export function FieldInspectorDrawer() {
   );
 
   const isFieldPk = Boolean(
-    inspectedField && (inspectedField.isPrimaryKey ?? inspectedField.name === 'id')
+    inspectedField &&
+      (inspectedField.isPrimaryKey ?? inspectedField.name === 'id')
   );
   const entityPkFields = inspectedEntity
     ? SeedEngine.getEntityPkFields(inspectedEntity)
@@ -176,7 +254,9 @@ export function FieldInspectorDrawer() {
       {inspectorTarget && inspectedEntity && inspectedField && (
         <div className="flex-1 overflow-y-auto p-4">
           <div className="mb-4">
-            <label className="block text-[11px] text-[#8a8b9a] mb-1.5">Name</label>
+            <label className="block text-[11px] text-[#8a8b9a] mb-1.5">
+              Name
+            </label>
             <input
               type="text"
               value={localFieldName}
@@ -190,7 +270,9 @@ export function FieldInspectorDrawer() {
           </div>
 
           <div className="mb-4">
-            <label className="block text-[11px] text-[#8a8b9a] mb-1.5">Type</label>
+            <label className="block text-[11px] text-[#8a8b9a] mb-1.5">
+              Type
+            </label>
             <select
               value={inspectedField.type}
               onChange={(e) =>
@@ -286,6 +368,101 @@ export function FieldInspectorDrawer() {
           >
             Delete field
           </button>
+
+          {/* Relationships Section (Cardinality & On Delete moved from edge to sidebar) */}
+          {fieldRelations.length > 0 && (
+            <div className="pt-4 mt-5 border-t border-white/[0.08] space-y-3">
+              <span className="block text-[11px] font-mono uppercase tracking-wider text-[#8a8b9a]">
+                Relationships ({fieldRelations.length})
+              </span>
+
+              {fieldRelations.map((rel, idx) => (
+                <div
+                  key={idx}
+                  className="p-3 rounded-lg bg-[#101219] border border-white/[0.09] space-y-2.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-mono text-[#3fc6d8] truncate">
+                      {rel.parentEntity}.{rel.parentPkField} → {rel.childEntity}.
+                      {rel.childFkField}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveRelation(rel.rawRelation)}
+                      className="text-[11px] font-mono text-[#565766] hover:text-[#e0708f] cursor-pointer flex-none"
+                      title="Remove relation"
+                    >
+                      Unlink
+                    </button>
+                  </div>
+
+                  {!rel.isCompleteComposite && (
+                    <div className="p-2 rounded bg-[#e08a3c]/12 border border-dashed border-[#e08a3c]/40 text-[10.5px] font-mono text-[#e08a3c] space-y-1.5">
+                      <div>
+                        ⚠️ Missing composite PK:{' '}
+                        {rel.missingParentPkFields.join(', ')}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          autoWireCompositeRelation(
+                            rel.parentEntity,
+                            rel.childEntity
+                          )
+                        }
+                        className="w-full py-1 rounded bg-[#e08a3c] text-[#1a1206] font-semibold text-[10px] cursor-pointer"
+                      >
+                        + Auto-wire missing key
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2 pt-0.5">
+                    <div>
+                      <label className="block text-[10px] font-mono text-[#8a8b9a] mb-1">
+                        Cardinality
+                      </label>
+                      <select
+                        value={rel.rawRelation.type}
+                        onChange={(e) =>
+                          handleUpdateRelation(rel.rawRelation, {
+                            type: e.target.value as Relation['type'],
+                          })
+                        }
+                        className="w-full bg-[#14161d] border border-white/[0.09] focus:border-[#e08a3c]/50 rounded px-2 py-1.5 text-[11.5px] font-mono text-[#e8e8ee] outline-none cursor-pointer"
+                      >
+                        <option value="ONE_TO_ONE">1 : 1</option>
+                        <option value="ONE_TO_MANY">1 : N</option>
+                        <option value="MANY_TO_MANY">N : M</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-mono text-[#8a8b9a] mb-1">
+                        On Delete
+                      </label>
+                      <select
+                        value={rel.rawRelation.onDelete || 'RESTRICT'}
+                        onChange={(e) =>
+                          handleUpdateRelation(rel.rawRelation, {
+                            onDelete: e.target.value as NonNullable<
+                              Relation['onDelete']
+                            >,
+                          })
+                        }
+                        className="w-full bg-[#14161d] border border-white/[0.09] focus:border-[#e08a3c]/50 rounded px-2 py-1.5 text-[11.5px] font-mono text-[#e8e8ee] outline-none cursor-pointer"
+                      >
+                        <option value="RESTRICT">RESTRICT</option>
+                        <option value="CASCADE">CASCADE</option>
+                        <option value="SET NULL">SET NULL</option>
+                        <option value="SET DEFAULT">SET DEFAULT</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Table Indexes & Composite Key Section */}
           <div className="pt-4 mt-5 border-t border-white/[0.08] space-y-3">

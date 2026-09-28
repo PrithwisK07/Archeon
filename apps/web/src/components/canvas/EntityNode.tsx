@@ -159,7 +159,8 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
             title={`Composite Primary Key: (${pkFields.join(', ')})`}
             className="text-[9px] font-mono px-1.5 py-[1px] rounded bg-[#e08a3c]/15 text-[#e08a3c] border border-[#e08a3c]/30 flex-none"
           >
-            @@id({pkFields.length})
+            
+            CPK({pkFields.length})
           </span>
         )}
 
