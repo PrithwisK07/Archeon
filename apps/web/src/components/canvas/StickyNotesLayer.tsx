@@ -1,5 +1,8 @@
 import { useReactFlow, useViewport } from 'reactflow';
-import { useArchitectureStore, StickyNoteColor } from '../../store/architectureStore';
+import {
+  useArchitectureStore,
+  StickyNoteColor,
+} from '../../store/architectureStore';
 
 const NOTE_THEMES: Record<
   StickyNoteColor,
@@ -71,88 +74,108 @@ export function ZoomHud() {
 }
 
 export function StickyNotesLayer({ onAddTable }: { onAddTable: () => void }) {
-  const { present, notes: storeNotes, updateNote, deleteNote } = useArchitectureStore();
+  const {
+    present,
+    notes: storeNotes,
+    updateNote,
+    deleteNote,
+  } = useArchitectureStore();
+  const { x: vpX, y: vpY, zoom } = useViewport();
 
   const notes = present.notes || storeNotes || [];
 
   return (
     <>
-      {notes.map((note) => {
-        const colorKey: StickyNoteColor = note.color || 'yellow';
-        const theme = NOTE_THEMES[colorKey] || NOTE_THEMES.yellow;
+      {/* World-Space Container: Pans and zooms together with the ReactFlow canvas */}
+      <div
+        style={{
+          transform: `translate(${vpX}px, ${vpY}px) scale(${zoom})`,
+          transformOrigin: '0 0',
+        }}
+        className="absolute inset-0 pointer-events-none z-20"
+      >
+        {notes.map((note) => {
+          const colorKey: StickyNoteColor =
+            (note.color as StickyNoteColor) || 'yellow';
+          const theme = NOTE_THEMES[colorKey] || NOTE_THEMES.yellow;
 
-        return (
-          <div
-            key={note.id}
-            style={{ left: note.x, top: note.y }}
-            className={`group/note absolute w-[190px] min-h-[108px] ${theme.bg} ${theme.text} rounded-lg shadow-[0_14px_28px_-14px_rgba(0,0,0,0.5)] text-[12.5px] leading-[1.45] z-20 transition-colors duration-150`}
-          >
-            {/* Drag Handle + Hover Color Picker + Delete */}
+          return (
             <div
-              onPointerDown={(e) => {
-                if ((e.target as HTMLElement).closest('button')) return;
-                e.stopPropagation();
-                const startX = e.clientX;
-                const startY = e.clientY;
-                const origX = note.x;
-                const origY = note.y;
-                const move = (ev: PointerEvent) => {
-                  updateNote(note.id, {
-                    x: origX + (ev.clientX - startX),
-                    y: origY + (ev.clientY - startY),
-                  });
-                };
-                const up = () => {
-                  window.removeEventListener('pointermove', move);
-                  window.removeEventListener('pointerup', up);
-                };
-                window.addEventListener('pointermove', move);
-                window.addEventListener('pointerup', up);
-              }}
-              className="h-[22px] px-2 cursor-grab active:cursor-grabbing flex items-center justify-between relative"
+              key={note.id}
+              style={{ left: note.x, top: note.y }}
+              className={`group/note pointer-events-auto absolute w-[190px] min-h-[108px] ${theme.bg} ${theme.text} rounded-lg shadow-[0_14px_28px_-14px_rgba(0,0,0,0.5)] text-[12.5px] leading-[1.45] transition-colors duration-150`}
             >
+              {/* Drag Handle + Delete */}
+              <div
+                onPointerDown={(e) => {
+                  if ((e.target as HTMLElement).closest('button')) return;
+                  e.stopPropagation();
+                  const startX = e.clientX;
+                  const startY = e.clientY;
+                  const origX = note.x;
+                  const origY = note.y;
+                  const currentZoom = zoom || 1;
 
-              {/* Center Grip Dots (hidden when color swatches appear on hover) */}
-              <span className="absolute inset-0 flex items-center justify-center gap-[3px] pointer-events-none group-hover/note:opacity-0 transition-opacity">
-                <span className={`w-[3px] h-[3px] rounded-full ${theme.dot}`} />
-                <span className={`w-[3px] h-[3px] rounded-full ${theme.dot}`} />
-                <span className={`w-[3px] h-[3px] rounded-full ${theme.dot}`} />
-              </span>
-
-              {/* Delete Note Button */}
-              <button
-                type="button"
-                onClick={() => deleteNote(note.id)}
-                className="w-4 h-4 rounded-[5px] opacity-0 group-hover/note:opacity-60 hover:!opacity-100 hover:bg-black/10 flex items-center justify-center transition-opacity cursor-pointer"
-                title="Delete note"
+                  const move = (ev: PointerEvent) => {
+                    updateNote(note.id, {
+                      x: Math.round(origX + (ev.clientX - startX) / currentZoom),
+                      y: Math.round(origY + (ev.clientY - startY) / currentZoom),
+                    });
+                  };
+                  const up = () => {
+                    window.removeEventListener('pointermove', move);
+                    window.removeEventListener('pointerup', up);
+                  };
+                  window.addEventListener('pointermove', move);
+                  window.addEventListener('pointerup', up);
+                }}
+                className="h-[22px] px-2 cursor-grab active:cursor-grabbing flex items-center justify-end relative"
               >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  className="w-[11px] h-[11px]"
-                >
-                  <path d="M6 6l12 12M18 6L6 18" />
-                </svg>
-              </button>
-            </div>
+                {/* Center Grip Dots */}
+                <span className="absolute inset-0 flex items-center justify-center gap-[3px] pointer-events-none">
+                  <span className={`w-[3px] h-[3px] rounded-full ${theme.dot}`} />
+                  <span className={`w-[3px] h-[3px] rounded-full ${theme.dot}`} />
+                  <span className={`w-[3px] h-[3px] rounded-full ${theme.dot}`} />
+                </span>
 
-            {/* Editable Note Body */}
-            <div
-              contentEditable
-              suppressContentEditableWarning
-              spellCheck={false}
-              onBlur={(e) =>
-                updateNote(note.id, { text: e.currentTarget.textContent || '' })
-              }
-              className="px-3 pb-3 pt-0.5 outline-none break-words select-text"
-            >
-              {note.text}
+                {/* Delete Note Button */}
+                <button
+                  type="button"
+                  onClick={() => deleteNote(note.id)}
+                  className="w-4 h-4 rounded-[5px] opacity-0 group-hover/note:opacity-60 hover:!opacity-100 hover:bg-black/10 flex items-center justify-center transition-opacity cursor-pointer"
+                  title="Delete note"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    className="w-[11px] h-[11px]"
+                  >
+                    <path d="M6 6l12 12M18 6L6 18" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Editable Note Body */}
+              <div
+                contentEditable
+                suppressContentEditableWarning
+                spellCheck={false}
+                onPointerDown={(e) => e.stopPropagation()}
+                onBlur={(e) =>
+                  updateNote(note.id, {
+                    text: e.currentTarget.textContent || '',
+                  })
+                }
+                className="px-3 pb-3 pt-0.5 outline-none break-words select-text"
+              >
+                {note.text}
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
 
       {/* Bottom-Center "+ Add table" Pill */}
       <button

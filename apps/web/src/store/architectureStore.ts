@@ -513,13 +513,13 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
 
     autoArrangeNodes: () => {
       const cols = 3,
-        gapX = 290,
-        gapY = 260;
+        gapX = 360,
+        gapY = 300;
       set((state) => ({
         nodes: state.nodes.map((node, i) => ({
           ...node,
           position: {
-            x: 60 + (i % cols) * gapX,
+            x: 80 + (i % cols) * gapX,
             y: 60 + Math.floor(i / cols) * gapY,
           },
         })),
