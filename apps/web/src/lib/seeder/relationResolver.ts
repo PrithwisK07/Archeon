@@ -13,11 +13,62 @@ export interface ResolvedRelation {
   childFkField: string;
   type: Relation['type'];
   onDelete: NonNullable<Relation['onDelete']>;
+  isCompositeParent: boolean;
+  isCompleteComposite: boolean;
+  missingParentPkFields: string[];
+}
+
+export interface CompositeRelationGroup {
+  parentEntity: string;
+  childEntity: string;
+  type: Relation['type'];
+  onDelete: NonNullable<Relation['onDelete']>;
+  isComplete: boolean;
+  missingParentPkFields: string[];
+  mappings: Array<{
+    parentPkField: string;
+    childFkField: string;
+  }>;
 }
 
 export function isFieldPk(field?: Field): boolean {
   if (!field) return false;
   return field.isPrimaryKey !== undefined ? field.isPrimaryKey : field.name === 'id';
+}
+
+/**
+ * Returns all Primary Key field names for an entity (supports both single PK and Composite PK).
+ */
+export function getEntityPkFields(entity: Entity): string[] {
+  const fieldNames = new Set(entity.fields.map((f) => f.name));
+  const pkSet = new Set<string>();
+
+  // 1. Explicit composite primaryKey array on entity
+  if (entity.primaryKey && entity.primaryKey.length > 0) {
+    entity.primaryKey.forEach((pk) => {
+      if (fieldNames.has(pk)) pkSet.add(pk);
+    });
+  }
+
+  // 2. Field-level isPrimaryKey flags
+  entity.fields.forEach((f) => {
+    if (isFieldPk(f)) pkSet.add(f.name);
+  });
+
+  if (pkSet.size === 0 && entity.fields[0]) {
+    pkSet.add(entity.fields[0].name);
+  }
+
+  return Array.from(pkSet);
+}
+
+/**
+ * Returns a deterministic string key for a row (joins composite PK values with "::").
+ */
+export function getRowCompositeKey(entity: Entity, row: Record<string, any>): string {
+  const pkFields = getEntityPkFields(entity);
+  if (pkFields.length === 0) return String(row.id ?? '');
+  return pkFields.map((k) => String(row[k] ?? '')).join('::');
 }
 
 function singularize(word: string): string {
@@ -38,14 +89,16 @@ export function normalizeStem(str: string): string {
 
 /**
  * Resolves every relation in CanonicalIR into a deterministic
- * (parentEntity, parentPkField) -> (childEntity, childFkField) mapping.
+ * (parentEntity, parentPkField) -> (childEntity, childFkField) mapping,
+ * and marks whether composite PK references are complete or missing wires.
  */
 export function resolveAllRelations(ir: CanonicalIR): ResolvedRelation[] {
-  const resolved: ResolvedRelation[] = [];
-
-  const getPkField = (ent: Entity): string => {
-    return ent.fields.find((f) => isFieldPk(f))?.name || ent.fields[0]?.name || 'id';
-  };
+  const prelim: Array<
+    Omit<
+      ResolvedRelation,
+      'isCompositeParent' | 'isCompleteComposite' | 'missingParentPkFields'
+    >
+  > = [];
 
   for (const rel of ir.relations) {
     const srcEnt = ir.entities.find((e) => e.name === rel.sourceEntity);
@@ -55,14 +108,12 @@ export function resolveAllRelations(ir: CanonicalIR): ResolvedRelation[] {
     const srcField = srcEnt.fields.find((f) => f.name === rel.sourceField);
     const tgtField = tgtEnt.fields.find((f) => f.name === rel.targetField);
 
-    // 1. Explicit canvas handles: both fields exist on their respective tables
     if (srcField && tgtField) {
       const srcIsPk = isFieldPk(srcField);
       const tgtIsPk = isFieldPk(tgtField);
 
-      // If user dragged from Child (non-PK) -> Parent (PK), flip so Parent is source of truth
       if (!srcIsPk && tgtIsPk && srcEnt.name !== tgtEnt.name) {
-        resolved.push({
+        prelim.push({
           rawRelation: rel,
           parentEntity: tgtEnt.name,
           parentPkField: tgtField.name,
@@ -72,7 +123,7 @@ export function resolveAllRelations(ir: CanonicalIR): ResolvedRelation[] {
           onDelete: rel.onDelete || 'RESTRICT',
         });
       } else {
-        resolved.push({
+        prelim.push({
           rawRelation: rel,
           parentEntity: srcEnt.name,
           parentPkField: srcField.name,
@@ -85,18 +136,18 @@ export function resolveAllRelations(ir: CanonicalIR): ResolvedRelation[] {
       continue;
     }
 
-    // 2. Fallback only if AI omitted handles: match strictly by non-PK column name stem
     if (!rel.sourceField && !rel.targetField) {
       const srcStem = normalizeStem(srcEnt.name);
       const tgtFk = tgtEnt.fields.find(
         (f) => !isFieldPk(f) && normalizeStem(f.name.replace(/(_id|Id)$/, '')) === srcStem
       );
+      const srcPkFields = getEntityPkFields(srcEnt);
 
-      if (tgtFk) {
-        resolved.push({
+      if (tgtFk && srcPkFields.length === 1) {
+        prelim.push({
           rawRelation: rel,
           parentEntity: srcEnt.name,
-          parentPkField: getPkField(srcEnt),
+          parentPkField: srcPkFields[0],
           childEntity: tgtEnt.name,
           childFkField: tgtFk.name,
           type: rel.type,
@@ -106,5 +157,120 @@ export function resolveAllRelations(ir: CanonicalIR): ResolvedRelation[] {
     }
   }
 
-  return resolved;
+  // Evaluate Composite Primary Key completeness per (parentEntity -> childEntity) pair
+  return prelim.map((item) => {
+    const parentEnt = ir.entities.find((e) => e.name === item.parentEntity);
+    if (!parentEnt) {
+      return {
+        ...item,
+        isCompositeParent: false,
+        isCompleteComposite: true,
+        missingParentPkFields: [],
+      };
+    }
+
+    const parentPkFields = getEntityPkFields(parentEnt);
+    const isCompositeParent = parentPkFields.length > 1;
+
+    if (!isCompositeParent) {
+      return {
+        ...item,
+        isCompositeParent: false,
+        isCompleteComposite: true,
+        missingParentPkFields: [],
+      };
+    }
+
+    // If the referenced field on the parent is individually @unique, a single-column FK is valid in SQL
+    const referencedParentField = parentEnt.fields.find(
+      (f) => f.name === item.parentPkField
+    );
+    if (referencedParentField?.unique) {
+      return {
+        ...item,
+        isCompositeParent: false,
+        isCompleteComposite: true,
+        missingParentPkFields: [],
+      };
+    }
+
+    // Check if ALL composite PK fields of parentEnt are wired to this childEnt
+    const wiredParentFields = new Set(
+      prelim
+        .filter(
+          (r) =>
+            r.parentEntity === item.parentEntity && r.childEntity === item.childEntity
+        )
+        .map((r) => r.parentPkField)
+    );
+
+    const missingParentPkFields = parentPkFields.filter(
+      (pk) => !wiredParentFields.has(pk)
+    );
+
+    return {
+      ...item,
+      isCompositeParent: true,
+      isCompleteComposite: missingParentPkFields.length === 0,
+      missingParentPkFields,
+    };
+  });
+}
+
+/**
+ * Groups relations between the same (parentEntity, childEntity) so Composite Foreign Keys
+ * can be seeded, reconciled, and validated atomically from the same parent row.
+ */
+export function resolveCompositeGroups(
+  ir: CanonicalIR,
+  resolvedRels = resolveAllRelations(ir)
+): CompositeRelationGroup[] {
+  const map = new Map<string, CompositeRelationGroup>();
+
+  for (const rel of resolvedRels) {
+    const key = `${rel.parentEntity}:::${rel.childEntity}`;
+    const existing = map.get(key);
+
+    if (!existing) {
+      map.set(key, {
+        parentEntity: rel.parentEntity,
+        childEntity: rel.childEntity,
+        type: rel.type,
+        onDelete: rel.onDelete,
+        isComplete: rel.isCompleteComposite,
+        missingParentPkFields: rel.missingParentPkFields,
+        mappings: [
+          {
+            parentPkField: rel.parentPkField,
+            childFkField: rel.childFkField,
+          },
+        ],
+      });
+    } else {
+      if (
+        !existing.mappings.some(
+          (m) =>
+            m.parentPkField === rel.parentPkField &&
+            m.childFkField === rel.childFkField
+        )
+      ) {
+        existing.mappings.push({
+          parentPkField: rel.parentPkField,
+          childFkField: rel.childFkField,
+        });
+      }
+      existing.isComplete = existing.isComplete && rel.isCompleteComposite;
+    }
+  }
+
+  return Array.from(map.values());
+}
+
+/**
+ * Returns any incomplete composite FK groups for visual warnings on the canvas.
+ */
+export function getIncompleteCompositeRelations(
+  ir: CanonicalIR
+): CompositeRelationGroup[] {
+  return resolveCompositeGroups(ir).filter((g) => !g.isComplete);
 }

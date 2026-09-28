@@ -1,11 +1,16 @@
 import { faker } from '@faker-js/faker';
 import type { CanonicalIR, Entity } from '@zero-dollar/ir-core';
-import { ResolvedRelation, isFieldPk } from './relationResolver';
+import {
+  ResolvedRelation,
+  getEntityPkFields,
+  isFieldPk,
+  resolveCompositeGroups,
+} from './relationResolver';
 import { generateUniqueFieldValue } from './valueGenerator';
 
 /**
  * Generates `count` valid rows for `entity`, enforcing single-column uniqueness,
- * 1:1 FK uniqueness, composite PK / @@unique tuples, and temporal ordering.
+ * 1:1 FK uniqueness, composite PK / @@unique tuples, and atomic composite FKs.
  */
 export function generateRowsForEntity(
   ir: CanonicalIR,
@@ -15,25 +20,34 @@ export function generateRowsForEntity(
   count: number
 ): Record<string, any>[] {
   const newRows: Record<string, any>[] = [];
+  const pkFields = getEntityPkFields(entity);
+  const isCompositePk = pkFields.length > 1;
+
+  // Only consider complete relations for FK enforcement
+  const activeRelations = resolvedRelations.filter((r) => r.isCompleteComposite);
+  const compositeGroups = resolveCompositeGroups(ir, activeRelations).filter(
+    (g) => g.childEntity === entity.name && g.isComplete && g.mappings.length > 1
+  );
 
   const childFkFields = new Set<string>();
   const oneToOneFkFields = new Set<string>();
-  resolvedRelations.forEach((rel) => {
+  activeRelations.forEach((rel) => {
     if (rel.childEntity === entity.name) {
       childFkFields.add(rel.childFkField);
-      if (rel.type === 'ONE_TO_ONE') {
+      if (rel.type === 'ONE_TO_ONE' && !rel.isCompositeParent) {
         oneToOneFkFields.add(rel.childFkField);
       }
     }
   });
 
+  // Single-column uniqueness sets (do NOT put individual columns of a Composite PK here!)
   const uniqueSets = new Map<string, Set<any>>();
   entity.fields.forEach((f) => {
     const isFk = childFkFields.has(f.name);
-    const isPk = !isFk && isFieldPk(f);
+    const isSinglePk = !isCompositePk && !isFk && isFieldPk(f);
     const isUniqueNonFkId = f.unique && !(isFk && f.name === 'id');
 
-    if (isPk || isUniqueNonFkId || oneToOneFkFields.has(f.name)) {
+    if (isSinglePk || isUniqueNonFkId || oneToOneFkFields.has(f.name)) {
       uniqueSets.set(
         f.name,
         new Set(
@@ -45,20 +59,36 @@ export function generateRowsForEntity(
     }
   });
 
+  // Composite tuple uniqueness sets (Composite PK + Composite @@unique indexes)
   const compositeTuples = new Set<string>();
   const compositeFieldGroups: string[][] = [];
-  if (entity.primaryKey && entity.primaryKey.length > 1) {
-    compositeFieldGroups.push(entity.primaryKey);
+
+  if (isCompositePk) {
+    compositeFieldGroups.push(pkFields);
   }
   entity.indexes?.forEach((idx) => {
-    if (idx.unique && idx.fields.length > 1) {
-      compositeFieldGroups.push(idx.fields);
+    if (idx.unique && idx.fields.length > 0) {
+      if (idx.fields.length === 1) {
+        const singleField = idx.fields[0];
+        if (!uniqueSets.has(singleField)) {
+          uniqueSets.set(
+            singleField,
+            new Set(
+              existingRows
+                .map((r) => r[singleField])
+                .filter((v) => v !== undefined && v !== null)
+            )
+          );
+        }
+      } else {
+        compositeFieldGroups.push(idx.fields);
+      }
     }
   });
 
   existingRows.forEach((r) => {
     compositeFieldGroups.forEach((group, gIdx) => {
-      const key = `${gIdx}:${group.map((f) => r[f]).join('|')}`;
+      const key = `${gIdx}:${group.map((f) => String(r[f] ?? '')).join('|')}`;
       compositeTuples.add(key);
     });
   });
@@ -69,17 +99,17 @@ export function generateRowsForEntity(
     let rowAttempt = 0;
     const allAvailableRows = [...existingRows, ...newRows];
 
-    while (rowAttempt < 20) {
+    while (rowAttempt < 25) {
       row = {};
       compositeValid = true;
 
-      // Pass A: True Primary Keys (excluding any column acting as a Foreign Key)
+      // Pass A: Non-FK Primary Keys
       for (const field of entity.fields) {
         const isFk = childFkFields.has(field.name);
         if (!isFk && isFieldPk(field)) {
           row[field.name] = generateUniqueFieldValue(
             ir,
-            resolvedRelations,
+            activeRelations,
             entity,
             field,
             allAvailableRows,
@@ -96,7 +126,7 @@ export function generateRowsForEntity(
         if (!isFk && isFieldPk(field)) continue;
         row[field.name] = generateUniqueFieldValue(
           ir,
-          resolvedRelations,
+          activeRelations,
           entity,
           field,
           allAvailableRows,
@@ -104,6 +134,17 @@ export function generateRowsForEntity(
           uniqueSets.get(field.name),
           oneToOneFkFields.has(field.name)
         );
+      }
+
+      // Pass C: Atomic Composite FK Assignment (copy all columns of a composite FK from the SAME parent row)
+      for (const group of compositeGroups) {
+        const parentEnt = ir.entities.find((e) => e.name === group.parentEntity);
+        if (parentEnt?.seedData && parentEnt.seedData.length > 0) {
+          const chosenParentRow = faker.helpers.arrayElement(parentEnt.seedData);
+          for (const mapping of group.mappings) {
+            row[mapping.childFkField] = chosenParentRow[mapping.parentPkField];
+          }
+        }
       }
 
       if (row.id === undefined) {
@@ -121,7 +162,7 @@ export function generateRowsForEntity(
       if (compositeValid) {
         for (let gIdx = 0; gIdx < compositeFieldGroups.length; gIdx++) {
           const group = compositeFieldGroups[gIdx];
-          const tupleKey = `${gIdx}:${group.map((f) => row[f]).join('|')}`;
+          const tupleKey = `${gIdx}:${group.map((f) => String(row[f] ?? '')).join('|')}`;
           if (compositeTuples.has(tupleKey)) {
             compositeValid = false;
             break;
@@ -142,11 +183,10 @@ export function generateRowsForEntity(
       }
     });
     compositeFieldGroups.forEach((group, gIdx) => {
-      const tupleKey = `${gIdx}:${group.map((f) => row[f]).join('|')}`;
+      const tupleKey = `${gIdx}:${group.map((f) => String(row[f] ?? '')).join('|')}`;
       compositeTuples.add(tupleKey);
     });
 
-    // Temporal Coherence: updated_at / expires_at >= created_at
     const createdField = entity.fields.find(
       (f) => f.type === 'datetime' && /^created(_?at)?$/i.test(f.name)
     );
