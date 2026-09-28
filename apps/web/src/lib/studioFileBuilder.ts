@@ -17,10 +17,16 @@ export function buildStudioFileMap(
 ): Record<string, string> {
   const files: Record<string, string> = {};
 
-  // 1. Prisma Schema
+  // 1. Prisma Schema (supports single @id, composite @@id, @@unique, and @@index)
   let prismaCode = `generator client {\n  provider = "prisma-client-js"\n}\n\ndatasource db {\n  provider = "postgresql"\n  url      = env("DATABASE_URL")\n}\n\n`;
   for (const entity of ir.entities) {
     prismaCode += `model ${entity.name} {\n`;
+
+    const pkFieldNames = entity.fields
+      .filter((f) => f.isPrimaryKey ?? f.name === 'id')
+      .map((f) => f.name);
+    const isCompositePk = pkFieldNames.length > 1;
+
     for (const f of entity.fields) {
       const pType =
         f.type === 'number'
@@ -32,11 +38,31 @@ export function buildStudioFileMap(
           : f.type === 'json'
           ? 'Json'
           : 'String';
-      const pk = (f.isPrimaryKey ?? f.name === 'id') ? ' @id @default(uuid())' : '';
+
+      const isPkField = f.isPrimaryKey ?? f.name === 'id';
+      const pk =
+        !isCompositePk && isPkField
+          ? f.type === 'uuid'
+            ? ' @id @default(uuid())'
+            : ' @id'
+          : '';
       const uq = f.unique && !pk ? ' @unique' : '';
-      const opt = f.nullable ? '?' : '';
+      const opt = f.nullable && !isPkField ? '?' : '';
       prismaCode += `  ${f.name} ${pType}${opt}${pk}${uq}\n`;
     }
+
+    if (isCompositePk) {
+      prismaCode += `\n  @@id([${pkFieldNames.join(', ')}])\n`;
+    }
+
+    if (entity.indexes && entity.indexes.length > 0) {
+      for (const idx of entity.indexes) {
+        if (!idx.fields || idx.fields.length === 0) continue;
+        const directive = idx.unique ? '@@unique' : '@@index';
+        prismaCode += `  ${directive}([${idx.fields.join(', ')}])\n`;
+      }
+    }
+
     prismaCode += `}\n\n`;
   }
   files['prisma/schema.prisma'] =
@@ -134,7 +160,9 @@ export function buildFileTree(filePaths: string[]): TreeNode[] {
       currentPath = currentPath ? `${currentPath}/${part}` : part;
       const isFolder = idx < parts.length - 1;
 
-      let existing = currentLevel.find((n) => n.name === part && n.isFolder === isFolder);
+      let existing = currentLevel.find(
+        (n) => n.name === part && n.isFolder === isFolder
+      );
       if (!existing) {
         existing = {
           name: part,
@@ -180,9 +208,11 @@ export function getFileLanguageLabel(path: string): {
   monacoLang: string;
   statusLabel: string;
 } {
-  if (path.endsWith('.prisma')) return { monacoLang: 'graphql', statusLabel: 'Prisma' };
+  if (path.endsWith('.prisma'))
+    return { monacoLang: 'graphql', statusLabel: 'Prisma' };
   if (path.endsWith('.json')) return { monacoLang: 'json', statusLabel: 'JSON' };
-  if (path.endsWith('.sql')) return { monacoLang: 'sql', statusLabel: 'PostgreSQL' };
+  if (path.endsWith('.sql'))
+    return { monacoLang: 'sql', statusLabel: 'PostgreSQL' };
   if (path.endsWith('.env') || path.endsWith('.env.example'))
     return { monacoLang: 'ini', statusLabel: 'ENV' };
   return { monacoLang: 'typescript', statusLabel: 'TypeScript' };

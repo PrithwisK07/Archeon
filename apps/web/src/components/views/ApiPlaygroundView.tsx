@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useArchitectureStore } from '../../store/architectureStore';
-import { SeedEngine, isFieldPk } from '../../lib/seedEngine';
+import { SeedEngine } from '../../lib/seedEngine';
 import {
   ActiveReqTab,
   BodyMode,
@@ -53,28 +53,30 @@ export function ApiPlaygroundView() {
   const [kvFields, setKvFields] = useState<KeyValueField[]>([]);
   const [requestBodyText, setRequestBodyText] = useState<string>('{\n  \n}');
   const [jsonError, setJsonError] = useState<string | null>(null);
-  const [responseState, setResponseState] = useState<PlaygroundResponseState | null>(null);
+  const [responseState, setResponseState] =
+    useState<PlaygroundResponseState | null>(null);
 
-  const targetEntity = present.entities.find((e) => e.name === selectedEp.entityName);
-  const resolvedRelations = useMemo(() => SeedEngine.resolveAllRelations(present), [present]);
+  const targetEntity = present.entities.find(
+    (e) => e.name === selectedEp.entityName
+  );
+  const resolvedRelations = useMemo(
+    () => SeedEngine.resolveAllRelations(present),
+    [present]
+  );
 
-  const pkFieldName = useMemo(() => {
-    if (!targetEntity) return 'id';
-    const incomingFks = new Set(
-      resolvedRelations
-        .filter((r) => r.childEntity === targetEntity.name)
-        .map((r) => r.childFkField)
-    );
-    return (
-      targetEntity.fields.find((f) => !incomingFks.has(f.name) && isFieldPk(f))?.name ||
-      targetEntity.fields[0]?.name ||
-      'id'
-    );
-  }, [targetEntity, resolvedRelations]);
+  const pkFieldNames = useMemo(() => {
+    if (!targetEntity) return ['id'];
+    return SeedEngine.getEntityPkFields(targetEntity);
+  }, [targetEntity]);
+
+  const pkFieldName = pkFieldNames.join('::');
 
   useEffect(() => {
     if (!targetEntity && present.entities.length > 0) {
-      setSelectedEp({ entityName: present.entities[0].name, methodType: 'GET_LIST' });
+      setSelectedEp({
+        entityName: present.entities[0].name,
+        methodType: 'GET_LIST',
+      });
     }
   }, [present.entities, targetEntity]);
 
@@ -83,7 +85,10 @@ export function ApiPlaygroundView() {
     const rows = targetEntity.seedData || [];
     const matchedRow =
       rowId !== undefined
-        ? rows.find((r) => String(r[pkFieldName] ?? r.id) === rowId.trim())
+        ? rows.find(
+            (r) =>
+              SeedEngine.getRowCompositeKey(targetEntity, r) === rowId.trim()
+          )
         : rows[0];
 
     const { kvFields: nextKv, jsonText } = buildSamplePayloadForEntity(
@@ -104,8 +109,9 @@ export function ApiPlaygroundView() {
     if (!targetEntity) return;
 
     const firstRow = targetEntity.seedData?.[0];
-    const firstId = firstRow?.[pkFieldName] ?? firstRow?.id;
-    const initialId = firstId !== undefined ? String(firstId) : '';
+    const initialId = firstRow
+      ? SeedEngine.getRowCompositeKey(targetEntity, firstRow)
+      : '';
     setPathIdParam(initialId);
 
     const needsBody =
@@ -117,7 +123,7 @@ export function ApiPlaygroundView() {
     }
   }, [selectedEp.entityName, selectedEp.methodType, targetEntity?.name]);
 
-  // When user picks a different target record ID in PUT mode, load that record's current fields into the body!
+  // When user picks a different target record ID in PUT mode, load that record's current fields into the body
   const handleSelectTargetId = (newId: string) => {
     setPathIdParam(newId);
     if (selectedEp.methodType === 'PUT') {
@@ -134,7 +140,12 @@ export function ApiPlaygroundView() {
   const handleRawJsonChange = (raw: string) => {
     setRequestBodyText(raw);
     try {
-      const nextKv = parseJsonToKv(raw, present, targetEntity, resolvedRelations);
+      const nextKv = parseJsonToKv(
+        raw,
+        present,
+        targetEntity,
+        resolvedRelations
+      );
       setJsonError(null);
       if (nextKv) setKvFields(nextKv);
     } catch (err: any) {
@@ -160,31 +171,42 @@ export function ApiPlaygroundView() {
     setResponseState(res);
   };
 
-  const activeMeta = getEndpointMeta(selectedEp.entityName, selectedEp.methodType);
-  
-  const needsTableIdParam = selectedEp.methodType === 'DELETE' || selectedEp.methodType === 'GET_ID';
-  const needsIdParam =
-    selectedEp.methodType === 'PUT';
+  const activeMeta = getEndpointMeta(
+    selectedEp.entityName,
+    selectedEp.methodType
+  );
+
+  const needsTableIdParam =
+    selectedEp.methodType === 'DELETE' || selectedEp.methodType === 'GET_ID';
+  const needsIdParam = selectedEp.methodType === 'PUT';
+  const hasAnyIdInUrl = needsIdParam || needsTableIdParam;
   const needsBody =
     selectedEp.methodType === 'POST' || selectedEp.methodType === 'PUT';
 
   const existingRowsWithLabels = useMemo(() => {
     if (!targetEntity?.seedData) return [];
     const labelField = targetEntity.fields.find(
-      (f) => f.name !== pkFieldName && (f.type === 'string' || f.type === 'number')
+      (f) =>
+        !pkFieldNames.includes(f.name) &&
+        (f.type === 'string' || f.type === 'number')
     )?.name;
 
     return targetEntity.seedData
       .map((r, idx) => {
-        const idVal = String(r[pkFieldName] ?? r.id ?? '');
-        const preview = labelField && r[labelField] ? ` — ${String(r[labelField]).slice(0, 24)}` : '';
+        const idVal = SeedEngine.getRowCompositeKey(targetEntity, r);
+        const preview =
+          labelField && r[labelField]
+            ? ` — ${String(r[labelField]).slice(0, 24)}`
+            : '';
         return {
           idVal,
-          label: `Row #${idx + 1}: ${idVal.slice(0, 14)}…${preview}`,
+          label: `Row #${idx + 1}: ${idVal.slice(0, 20)}${
+            idVal.length > 20 ? '…' : ''
+          }${preview}`,
         };
       })
       .filter((item) => Boolean(item.idVal));
-  }, [targetEntity, pkFieldName]);
+  }, [targetEntity, pkFieldNames]);
 
   const existingIds = useMemo(
     () => existingRowsWithLabels.map((item) => item.idVal),
@@ -193,16 +215,21 @@ export function ApiPlaygroundView() {
 
   const liveUrlPreview = useMemo(() => {
     const base = `/v1/${selectedEp.entityName.toLowerCase()}`;
-    if (needsIdParam) return `${base}/${pathIdParam.trim() || ':id'}`;
+    if (hasAnyIdInUrl) return `${base}/${pathIdParam.trim() || ':id'}`;
     if (selectedEp.methodType === 'GET_LIST') {
       const qs = queryParams
         .filter((q) => q.enabled && q.key.trim())
-        .map((q) => `${encodeURIComponent(q.key.trim())}=${encodeURIComponent(q.value.trim())}`)
+        .map(
+          (q) =>
+            `${encodeURIComponent(q.key.trim())}=${encodeURIComponent(
+              q.value.trim()
+            )}`
+        )
         .join('&');
       return qs ? `${base}?${qs}` : base;
     }
     return base;
-  }, [selectedEp, needsIdParam, pathIdParam, queryParams]);
+  }, [selectedEp, hasAnyIdInUrl, pathIdParam, queryParams]);
 
   return (
     <div className="absolute inset-0 z-28 flex flex-col bg-[#0b0c10] select-none">
@@ -213,7 +240,13 @@ export function ApiPlaygroundView() {
           onClick={() => setIsApiPlaygroundOpen(false)}
           className="px-3.5 py-2 rounded-[8px] border border-white/[0.09] bg-[#14161d] hover:bg-white/[0.06] text-[12.5px] flex items-center gap-2 cursor-pointer transition-colors"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 text-[#8a8b9a]">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            className="w-3.5 h-3.5 text-[#8a8b9a]"
+          >
             <path d="M15 18l-6-6 6-6" />
           </svg>
           Schema Visualizer
@@ -221,7 +254,9 @@ export function ApiPlaygroundView() {
         <span className="text-[10px] font-mono px-2.5 py-1 rounded-full uppercase tracking-[0.4px] text-[#3fc6d8] bg-[#3fc6d8]/14 font-semibold">
           REST Client
         </span>
-        <span className="font-mono text-[15px] font-semibold text-[#e8e8ee]">API Playground</span>
+        <span className="font-mono text-[15px] font-semibold text-[#e8e8ee]">
+          API Playground
+        </span>
         <span className="text-[12px] text-[#565766] ml-1">
           Live constraint-checked execution against your seeded tables
         </span>
@@ -241,7 +276,11 @@ export function ApiPlaygroundView() {
               {/* URL Bar + Send Button */}
               <div className="flex items-center gap-2.5">
                 <div className="flex-1 flex items-center bg-[#101219] border border-white/[0.1] rounded-[10px] p-1.5 gap-2.5">
-                  <span className={`px-3 py-1.5 rounded-[7px] font-mono text-[11px] font-semibold uppercase border ${VERB_PILL_STYLES[activeMeta.verb]}`}>
+                  <span
+                    className={`px-3 py-1.5 rounded-[7px] font-mono text-[11px] font-semibold uppercase border ${
+                      VERB_PILL_STYLES[activeMeta.verb]
+                    }`}
+                  >
                     {activeMeta.verb}
                   </span>
                   <span className="font-mono text-[13.5px] text-[#e8e8ee] select-text truncate">
@@ -260,15 +299,11 @@ export function ApiPlaygroundView() {
                 </button>
               </div>
 
-              {/* Dedicated Target Record Selector Bar for PUT /{id}, GET /{id}, DELETE /{id} */}
+              {/* Dedicated Target Record Selector Bar for PUT /{id} */}
               {needsIdParam && (
                 <div className="flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl bg-[#14161d] border border-white/[0.09]">
                   <span className="text-[11.5px] font-mono font-semibold text-[#3fc6d8] uppercase tracking-wider">
-                    {selectedEp.methodType === 'PUT'
-                      ? `Target Record to Modify (${pkFieldName}):`
-                      : selectedEp.methodType === 'DELETE'
-                      ? `Target Record to Delete (${pkFieldName}):`
-                      : `Target Record to Fetch (${pkFieldName}):`}
+                    Target Record to Modify ({pkFieldName}):
                   </span>
 
                   <select
@@ -290,7 +325,9 @@ export function ApiPlaygroundView() {
                     ))}
                   </select>
 
-                  <span className="text-[11px] font-mono text-[#565766]">or ID:</span>
+                  <span className="text-[11px] font-mono text-[#565766]">
+                    or ID:
+                  </span>
 
                   <input
                     type="text"
@@ -315,7 +352,9 @@ export function ApiPlaygroundView() {
                     }`}
                   >
                     Params
-                    {needsTableIdParam && <span className="w-1.5 h-1.5 rounded-full bg-[#e08a3c]" />}
+                    {needsTableIdParam && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#e08a3c]" />
+                    )}
                   </button>
 
                   {needsBody && (
@@ -328,7 +367,9 @@ export function ApiPlaygroundView() {
                           : 'border-transparent text-[#8a8b9a] hover:text-[#e8e8ee]'
                       }`}
                     >
-                      {selectedEp.methodType === 'PUT' ? 'Update Body' : 'Create Body'}
+                      {selectedEp.methodType === 'PUT'
+                        ? 'Update Body'
+                        : 'Create Body'}
                       <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-white/[0.06] text-[#8fbf6b]">
                         {bodyMode === 'table' ? 'form-table' : 'json'}
                       </span>
@@ -362,7 +403,9 @@ export function ApiPlaygroundView() {
                     jsonError={jsonError}
                     onPrettifyJson={() => {
                       try {
-                        setRequestBodyText(JSON.stringify(JSON.parse(requestBodyText), null, 2));
+                        setRequestBodyText(
+                          JSON.stringify(JSON.parse(requestBodyText), null, 2)
+                        );
                         setJsonError(null);
                       } catch (e: any) {
                         setJsonError(e.message);
