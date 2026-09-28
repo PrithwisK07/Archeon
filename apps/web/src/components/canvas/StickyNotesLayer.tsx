@@ -71,7 +71,9 @@ export function ZoomHud() {
 }
 
 export function StickyNotesLayer({ onAddTable }: { onAddTable: () => void }) {
-  const { notes, updateNote, deleteNote } = useArchitectureStore();
+  const { present, notes: storeNotes, updateNote, deleteNote } = useArchitectureStore();
+
+  const notes = present.notes || storeNotes || [];
 
   return (
     <>

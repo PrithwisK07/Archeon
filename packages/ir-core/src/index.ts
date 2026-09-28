@@ -74,6 +74,24 @@ export const CustomSqlSnippetSchema = z.object({
   prompt: z.string(),
 });
 
+export type StickyNoteColor = "yellow" | "amber" | "rose" | "violet" | "cyan" | "lime";
+
+export interface StickyNote {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  color?: StickyNoteColor;
+}
+
+export const StickyNoteSchema = z.object({
+  id: z.string(),
+  x: z.number(),
+  y: z.number(),
+  text: z.string(),
+  color: z.enum(["yellow", "amber", "rose", "violet", "cyan", "lime"]).optional(),
+});
+
 export const CanonicalIRSchema = z.object({
   config: ProjectConfigSchema,
   entities: z.array(EntitySchema),
@@ -81,6 +99,7 @@ export const CanonicalIRSchema = z.object({
   enums: z.array(EnumSchema),
   endpoints: z.array(EndpointSchema),
   customSql: z.array(CustomSqlSnippetSchema).optional(),
+  notes: z.array(StickyNoteSchema).optional(),
 });
 
 // Export inferred types for the UI and Compiler

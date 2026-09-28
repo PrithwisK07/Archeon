@@ -10,13 +10,13 @@ export const NEXUS_COLORS = {
   lime: '#8fbf6b',
 } as const;
 
-export type NexusColorKey = keyof typeof NEXUS_COLORS;
+export type ArcheonColorKey = keyof typeof NEXUS_COLORS;
 
-const PALETTE_KEYS: NexusColorKey[] = ['violet', 'cyan', 'amber', 'rose', 'lime'];
+const PALETTE_KEYS: ArcheonColorKey[] = ['violet', 'cyan', 'amber', 'rose', 'lime'];
 
 export interface UINodeData {
   entity: Entity;
-  colorKey: NexusColorKey;
+  colorKey: ArcheonColorKey;
   colorHex: string;
   fkFields: string[];
 }

@@ -72,7 +72,7 @@ export default function Login() {
               <circle cx="12" cy="12" r="2.3" fill="#e08a3c" />
             </svg>
           </span>
-          Nexus
+          Archeon
         </div>
 
         <div className="relative z-10">
@@ -84,7 +84,7 @@ export default function Login() {
             </span>
           </h1>
           <p className="text-[#8a8b9a] max-w-[380px] text-[14.5px] leading-[1.65]">
-            Design schemas, routes and relationships on a live canvas — Nexus
+            Design schemas, routes and relationships on a live canvas — Archeon
             compiles it straight into a running, production-ready API.
           </p>
         </div>

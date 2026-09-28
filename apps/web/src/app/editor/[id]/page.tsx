@@ -7,7 +7,7 @@ import dynamic from 'next/dynamic';
 import { useArchitectureStore } from '../../../store/architectureStore';
 import type { CanonicalIR } from '@zero-dollar/ir-core';
 
-function NexusLoadingScreen({ label }: { label: string }) {
+function ArcheonLoadingScreen({ label }: { label: string }) {
   return (
     <div className="w-screen h-screen bg-[#0b0c10] text-[#e8e8ee] flex flex-col items-center justify-center gap-4 relative overflow-hidden select-none">
       <div
@@ -26,7 +26,7 @@ function NexusLoadingScreen({ label }: { label: string }) {
           </svg>
         </div>
         <div className="flex flex-col items-center gap-1">
-          <span className="text-[13px] font-semibold tracking-[0.2px]">Nexus Studio</span>
+          <span className="text-[13px] font-semibold tracking-[0.2px]">Archeon Studio</span>
           <span className="text-[11px] text-[#8a8b9a] font-mono">{label}</span>
         </div>
       </div>
@@ -36,7 +36,7 @@ function NexusLoadingScreen({ label }: { label: string }) {
 
 const DynamicCanvas = dynamic(() => import('../../../components/canvas/Canvas'), {
   ssr: false,
-  loading: () => <NexusLoadingScreen label="Mounting schema.graph…" />,
+  loading: () => <ArcheonLoadingScreen label="Mounting schema.graph…" />,
 });
 
 export default function EditorPage() {
@@ -132,7 +132,7 @@ export default function EditorPage() {
   ]);
 
   if (isLoading) {
-    return <NexusLoadingScreen label="Hydrating workspace state…" />;
+    return <ArcheonLoadingScreen label="Hydrating workspace state…" />;
   }
 
   return <DynamicCanvas />;
