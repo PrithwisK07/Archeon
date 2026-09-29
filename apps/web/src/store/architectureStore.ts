@@ -73,7 +73,8 @@ export interface InspectorTarget {
 export type IDECommand =
   | MasterAction
   | { action: 'ADD_CUSTOM_SQL'; payload: CustomSqlSnippet }
-  | { action: 'REMOVE_CUSTOM_SQL'; id: string };
+  | { action: 'REMOVE_CUSTOM_SQL'; id: string }
+  | { action: 'UPDATE_CUSTOM_SQL'; id: string; payload: Partial<CustomSqlSnippet> };
 
 interface ArchitectureState {
   projectId: string | null;
@@ -699,6 +700,16 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
           applyAIPatch({
             ...present,
             customSql: (present.customSql || []).filter((s) => s.id !== cmd.id),
+          });
+          return;
+        }
+
+        if (cmd.action === 'UPDATE_CUSTOM_SQL') {
+          applyAIPatch({
+            ...present,
+            customSql: (present.customSql || []).map((s) =>
+              s.id === cmd.id ? { ...s, ...cmd.payload } : s
+            ),
           });
           return;
         }

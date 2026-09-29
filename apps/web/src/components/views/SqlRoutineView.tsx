@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useArchitectureStore } from '../../store/architectureStore';
 import type { CustomSqlSnippet } from '@zero-dollar/ir-core';
 
@@ -40,17 +40,75 @@ export interface SqlRoutineViewProps {
 }
 
 export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) {
-  const { setActiveRoutineId, showToast } = useArchitectureStore();
+  const { setActiveRoutineId, dispatchManualAction, showToast } =
+    useArchitectureStore();
+  
   const [copied, setCopied] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  
+  // Local state for edits before saving
+  const [localName, setLocalName] = useState(routine.name);
+  const [localSql, setLocalSql] = useState(routine.sql);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync local state if the routine changes externally
+  useEffect(() => {
+    setLocalName(routine.name);
+    setLocalSql(routine.sql);
+    setIsEditing(false);
+  }, [routine.id, routine.name, routine.sql]);
+
+  useEffect(() => {
+    if (isEditing && nameInputRef.current) {
+      nameInputRef.current.focus();
+    }
+  }, [isEditing]);
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(routine.sql);
+      await navigator.clipboard.writeText(isEditing ? localSql : routine.sql);
       setCopied(true);
       showToast('SQL copied to clipboard');
       setTimeout(() => setCopied(false), 2000);
     } catch {
       showToast('Failed to copy SQL');
+    }
+  };
+
+  const handleSave = () => {
+    const cleanName = localName.trim().replace(/[^a-zA-Z0-9_]/g, '_');
+    if (!cleanName || !localSql.trim()) {
+      showToast('Name and SQL code cannot be empty');
+      return;
+    }
+
+    dispatchManualAction({
+      action: 'UPDATE_CUSTOM_SQL',
+      id: routine.id,
+      payload: { 
+        name: cleanName, 
+        sql: localSql 
+      },
+    });
+    
+    setIsEditing(false);
+    showToast('Saved changes');
+  };
+
+  const handleCancelEdit = () => {
+    setLocalName(routine.name);
+    setLocalSql(routine.sql);
+    setIsEditing(false);
+  };
+
+  const handleDelete = () => {
+    if (confirm(`Are you sure you want to delete "${routine.name}"?`)) {
+      dispatchManualAction({
+        action: 'REMOVE_CUSTOM_SQL',
+        id: routine.id,
+      });
+      setActiveRoutineId(null);
+      showToast('Routine deleted');
     }
   };
 
@@ -83,12 +141,53 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
               : 'text-[#3fc6d8] bg-[#3fc6d8]/14'
           }`}
         >
-          {routine.type === 'STORED_PROCEDURE' ? 'procedure' : routine.type.toLowerCase()}
+          {routine.type === 'STORED_PROCEDURE'
+            ? 'procedure'
+            : routine.type.toLowerCase()}
         </span>
 
-        <span className="font-mono text-[15px] font-semibold">{routine.name}</span>
+        {isEditing ? (
+          <input
+            ref={nameInputRef}
+            type="text"
+            value={localName}
+            onChange={(e) => setLocalName(e.target.value)}
+            className="font-mono text-[15px] font-semibold bg-[#101219] border border-white/[0.2] focus:border-[#8b7ff0] rounded px-2 py-0.5 outline-none text-[#e8e8ee] min-w-[250px]"
+            placeholder="Routine name..."
+          />
+        ) : (
+          <span className="font-mono text-[15px] font-semibold">{routine.name}</span>
+        )}
 
         <div className="flex-1" />
+
+        {/* Edit / Save Controls */}
+        {isEditing ? (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              className="px-[13px] py-[7px] rounded-[7px] border border-white/[0.09] text-[#8a8b9a] hover:text-[#e8e8ee] hover:bg-white/[0.045] text-[13px] cursor-pointer transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              className="px-[13px] py-[7px] rounded-[7px] bg-[#8b7ff0] text-[#0b0c10] hover:brightness-110 font-semibold text-[13px] cursor-pointer transition-colors"
+            >
+              Save Changes
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setIsEditing(true)}
+            className="px-[13px] py-[7px] rounded-[7px] border border-white/[0.09] bg-white/[0.045] hover:bg-white/[0.07] text-[#8b7ff0] hover:text-[#b5adf2] text-[13px] flex items-center gap-2 cursor-pointer transition-colors"
+          >
+            Edit SQL
+          </button>
+        )}
 
         {/* Copy SQL Button */}
         <button
@@ -121,9 +220,21 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
                 <rect x="9" y="9" width="13" height="13" rx="2" />
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
               </svg>
-              Copy SQL
+              Copy
             </>
           )}
+        </button>
+
+        {/* Delete Routine Button */}
+        <button
+          type="button"
+          onClick={handleDelete}
+          className="px-[10px] py-[7px] rounded-[7px] border border-white/[0.09] bg-white/[0.045] hover:bg-[#e0708f]/20 hover:border-[#e0708f]/40 text-[#e0708f] text-[13px] flex items-center justify-center cursor-pointer transition-colors"
+          title="Delete custom routine"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5">
+            <path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14" />
+          </svg>
         </button>
 
         {routine.targetEntity && (
@@ -163,7 +274,7 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
       </div>
 
       {/* Saved Prompt Banner */}
-      {routine.prompt && (
+      {routine.prompt && !isEditing && (
         <div className="mb-3.5 px-3.5 py-2.5 rounded-xl bg-[#8b7ff0]/[0.08] border border-[#8b7ff0]/25 flex items-start gap-2.5">
           <svg
             viewBox="0 0 24 24"
@@ -181,11 +292,22 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
         </div>
       )}
 
-      {/* Highlighted SQL Code Box */}
-      <div className="flex-1 overflow-auto border border-white/[0.09] rounded-xl bg-[#101219]">
-        <pre className="m-0 p-5 font-mono text-[12.5px] leading-[1.7] text-[#e8e8ee] whitespace-pre-wrap select-text">
-          {highlightSQLToJSX(routine.sql)}
-        </pre>
+      {/* Code Editor / Highlighted Box */}
+      <div className="flex-1 border border-white/[0.09] rounded-xl bg-[#101219] overflow-hidden relative">
+        {isEditing ? (
+          <textarea
+            value={localSql}
+            onChange={(e) => setLocalSql(e.target.value)}
+            spellCheck={false}
+            className="absolute inset-0 w-full h-full p-5 font-mono text-[12.5px] leading-[1.7] text-[#e8e8ee] bg-transparent outline-none resize-none"
+          />
+        ) : (
+          <div className="absolute inset-0 overflow-auto">
+            <pre className="m-0 p-5 font-mono text-[12.5px] leading-[1.7] text-[#e8e8ee] whitespace-pre-wrap select-text">
+              {highlightSQLToJSX(routine.sql)}
+            </pre>
+          </div>
+        )}
       </div>
     </div>
   );
