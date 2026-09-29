@@ -233,15 +233,42 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
         {liveEntity.fields.map((field) => {
           const isFk = fkFields.includes(field.name);
           const isMemberOfPk = pkFields.includes(field.name);
-          const isPk = isCompositePkTable
-            ? isMemberOfPk
-            : !isFk && (field.isPrimaryKey ?? field.name === 'id');
+          const isCompositePkMember = isCompositePkTable && isMemberOfPk;
+          const isSinglePk = !isCompositePkTable && isMemberOfPk;
+          
           const isIndexed = indexedFieldsMap.has(field.name);
           const isUniqueIdx = indexedFieldsMap.get(field.name) === true;
 
           const isInspected =
             inspectorTarget?.entityName === entity.name &&
             inspectorTarget?.fieldName === field.name;
+
+          // Determine Key Symbol & Styling
+          let keySymbol = '·';
+          let keyTitle: string | undefined = undefined;
+          let keyColor = 'text-[#565766]';
+
+          if (isCompositePkMember && isFk) {
+            keySymbol = '◈○';
+            keyTitle = 'Composite Primary Key + Foreign Key';
+            keyColor = 'text-[#e08a3c]';
+          } else if (isCompositePkMember) {
+            keySymbol = '◈';
+            keyTitle = 'Part of Composite Primary Key';
+            keyColor = 'text-[#8fbf6b]';
+          } else if (isSinglePk && isFk) {
+            keySymbol = '◆○';
+            keyTitle = 'Primary Key + Foreign Key';
+            keyColor = 'text-[#e08a3c]';
+          } else if (isSinglePk) {
+            keySymbol = '◆';
+            keyTitle = 'Primary Key';
+            keyColor = 'text-[#e08a3c]';
+          } else if (isFk) {
+            keySymbol = '○';
+            keyTitle = 'Foreign Key';
+            keyColor = 'text-[#3fc6d8]';
+          }
 
           return (
             <div
@@ -262,28 +289,12 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
                 className="nexus-handle !left-[-4px]"
               />
 
-              {/* Key Symbol: ◆○ for Join Table PK+FK, ◆ for PK, ○ for FK, · for normal */}
+              {/* Dynamic Key Symbol (◈, ◆, ○, ◈○) */}
               <span
-                title={
-                  isPk && isFk
-                    ? 'Composite Primary Key + Foreign Key'
-                    : isPk
-                    ? 'Primary Key'
-                    : isFk
-                    ? 'Foreign Key'
-                    : undefined
-                }
-                className={`w-[15px] flex-none text-center text-[9.5px] ${
-                  isPk && isFk
-                    ? 'text-[#e08a3c]'
-                    : isPk
-                    ? 'text-[#e08a3c]'
-                    : isFk
-                    ? 'text-[#3fc6d8]'
-                    : 'text-[#565766]'
-                }`}
+                title={keyTitle}
+                className={`w-[15px] flex-none text-center text-[9.5px] ${keyColor}`}
               >
-                {isPk && isFk ? '◆○' : isPk ? '◆' : isFk ? '○' : '·'}
+                {keySymbol}
               </span>
 
               {/* Field Name */}
@@ -294,11 +305,7 @@ export const EntityNode = memo(({ data, selected, id }: NodeProps<UINodeData>) =
               {/* Index Badge (IDX / UQ) */}
               {isIndexed && (
                 <span
-                  title={
-                    isUniqueIdx
-                      ? 'Part of @@unique index'
-                      : 'Part of @@index'
-                  }
+                  title={isUniqueIdx ? 'Part of @@unique index' : 'Part of @@index'}
                   className={`text-[8.5px] font-mono px-1 py-[1px] rounded flex-none border ${
                     isUniqueIdx
                       ? 'bg-[#e08a3c]/14 text-[#e08a3c] border-[#e08a3c]/30'
