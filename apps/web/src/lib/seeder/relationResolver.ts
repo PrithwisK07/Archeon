@@ -43,17 +43,15 @@ export function getEntityPkFields(entity: Entity): string[] {
   const fieldNames = new Set(entity.fields.map((f) => f.name));
   const pkSet = new Set<string>();
 
-  // 1. Explicit composite primaryKey array on entity
-  if (entity.primaryKey && entity.primaryKey.length > 0) {
+  entity.fields.forEach((f) => {
+    if (isFieldPk(f)) pkSet.add(f.name);
+  });
+
+  if (pkSet.size === 0 && entity.primaryKey && entity.primaryKey.length > 0) {
     entity.primaryKey.forEach((pk) => {
       if (fieldNames.has(pk)) pkSet.add(pk);
     });
   }
-
-  // 2. Field-level isPrimaryKey flags
-  entity.fields.forEach((f) => {
-    if (isFieldPk(f)) pkSet.add(f.name);
-  });
 
   if (pkSet.size === 0 && entity.fields[0]) {
     pkSet.add(entity.fields[0].name);
@@ -88,9 +86,39 @@ export function normalizeStem(str: string): string {
 }
 
 /**
- * Resolves every relation in CanonicalIR into a deterministic
- * (parentEntity, parentPkField) -> (childEntity, childFkField) mapping,
- * and marks whether composite PK references are complete or missing wires.
+ * Finds a matching Foreign Key column on `childEnt` for a given `parentPkField` on `parentEnt`.
+ */
+export function findMatchingChildFkField(
+  parentEnt: Entity,
+  parentPkField: string,
+  childEnt: Entity
+): Field | undefined {
+  const parentStem = normalizeStem(parentEnt.name);
+  const pkLower = parentPkField.toLowerCase();
+
+  return childEnt.fields.find((f) => {
+    const fLower = f.name.toLowerCase();
+    // 1. Exact match (e.g. parent `sku` -> child `sku` or `product_id` -> `product_id`)
+    if (pkLower !== 'id' && fLower === pkLower) return true;
+    // 2. Prefixed match (e.g. `product_id`, `product_sku`)
+    if (fLower === `${parentStem}_${pkLower}` || fLower === `${parentStem}${pkLower}`) {
+      return true;
+    }
+    // 3. Stem match for `id` (e.g. parent `Product.id` -> child `product_id`)
+    if (
+      pkLower === 'id' &&
+      !isFieldPk(f) &&
+      normalizeStem(f.name.replace(/(_id|Id)$/, '')) === parentStem
+    ) {
+      return true;
+    }
+    return false;
+  });
+}
+
+/**
+ * Resolves every relation in CanonicalIR into a deterministic mapping,
+ * including AI-generated relations that omit sourceField/targetField.
  */
 export function resolveAllRelations(ir: CanonicalIR): ResolvedRelation[] {
   const prelim: Array<
@@ -108,6 +136,7 @@ export function resolveAllRelations(ir: CanonicalIR): ResolvedRelation[] {
     const srcField = srcEnt.fields.find((f) => f.name === rel.sourceField);
     const tgtField = tgtEnt.fields.find((f) => f.name === rel.targetField);
 
+    // Case 1: Both sourceField and targetField are explicitly defined
     if (srcField && tgtField) {
       const srcIsPk = isFieldPk(srcField);
       const tgtIsPk = isFieldPk(tgtField);
@@ -136,20 +165,37 @@ export function resolveAllRelations(ir: CanonicalIR): ResolvedRelation[] {
       continue;
     }
 
-    if (!rel.sourceField && !rel.targetField) {
-      const srcStem = normalizeStem(srcEnt.name);
-      const tgtFk = tgtEnt.fields.find(
-        (f) => !isFieldPk(f) && normalizeStem(f.name.replace(/(_id|Id)$/, '')) === srcStem
-      );
-      const srcPkFields = getEntityPkFields(srcEnt);
+    // Case 2: AI-generated relation where sourceField / targetField were omitted
+    const srcPkFields = getEntityPkFields(srcEnt);
+    let matchedAny = false;
 
-      if (tgtFk && srcPkFields.length === 1) {
+    for (const pkField of srcPkFields) {
+      const matchedChildFk = findMatchingChildFkField(srcEnt, pkField, tgtEnt);
+      if (matchedChildFk) {
+        matchedAny = true;
+        prelim.push({
+          rawRelation: rel,
+          parentEntity: srcEnt.name,
+          parentPkField: pkField,
+          childEntity: tgtEnt.name,
+          childFkField: matchedChildFk.name,
+          type: rel.type,
+          onDelete: rel.onDelete || 'RESTRICT',
+        });
+      }
+    }
+
+    // Fallback if AI named the FK column something non-standard
+    if (!matchedAny && srcPkFields[0]) {
+      const fallbackChildFk =
+        tgtEnt.fields.find((f) => !isFieldPk(f)) || tgtEnt.fields[0];
+      if (fallbackChildFk) {
         prelim.push({
           rawRelation: rel,
           parentEntity: srcEnt.name,
           parentPkField: srcPkFields[0],
           childEntity: tgtEnt.name,
-          childFkField: tgtFk.name,
+          childFkField: fallbackChildFk.name,
           type: rel.type,
           onDelete: rel.onDelete || 'RESTRICT',
         });
@@ -181,11 +227,26 @@ export function resolveAllRelations(ir: CanonicalIR): ResolvedRelation[] {
       };
     }
 
-    // If the referenced field on the parent is individually @unique, a single-column FK is valid in SQL
     const referencedParentField = parentEnt.fields.find(
       (f) => f.name === item.parentPkField
     );
-    if (referencedParentField?.unique) {
+    const isMemberOfCompositePk = parentPkFields.includes(item.parentPkField);
+
+    // SQL RULE ENFORCEMENT: A single-column FK to a table with a composite PK is ONLY valid if:
+    // 1) It references a non-PK column that is explicitly marked @unique, OR
+    // 2) The user explicitly created a single-column @@unique([col]) index on that parent column.
+    const hasExplicitSingleUniqueIndex = (parentEnt.indexes || []).some(
+      (idx) =>
+        idx.unique &&
+        idx.fields.length === 1 &&
+        idx.fields[0] === item.parentPkField
+    );
+
+    if (
+      (!isMemberOfCompositePk && referencedParentField?.unique) ||
+      hasExplicitSingleUniqueIndex
+    ) {
+      // It's a valid unique reference, so it's technically a "complete" single-column FK
       return {
         ...item,
         isCompositeParent: false,
@@ -194,12 +255,13 @@ export function resolveAllRelations(ir: CanonicalIR): ResolvedRelation[] {
       };
     }
 
-    // Check if ALL composite PK fields of parentEnt are wired to this childEnt
+    // Otherwise, ALL composite PK fields of parentEnt must be wired to childEnt
     const wiredParentFields = new Set(
       prelim
         .filter(
           (r) =>
-            r.parentEntity === item.parentEntity && r.childEntity === item.childEntity
+            r.parentEntity === item.parentEntity &&
+            r.childEntity === item.childEntity
         )
         .map((r) => r.parentPkField)
     );
