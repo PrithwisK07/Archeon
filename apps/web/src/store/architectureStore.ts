@@ -178,6 +178,77 @@ const normalizeNotes = (rawNotes?: any[]): StickyNote[] =>
     color: (n?.color as StickyNoteColor) || 'yellow',
   }));
 
+const normalizeAIRelations = (ir: CanonicalIR): CanonicalIR => {
+  const expandedRelations: CanonicalIR['relations'] = [];
+  const seen = new Set<string>();
+
+  const pushUniqueRel = (rel: CanonicalIR['relations'][number]) => {
+    const key = `${rel.sourceEntity}.${rel.sourceField || ''}->${rel.targetEntity}.${rel.targetField || ''}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      expandedRelations.push(rel);
+    }
+  };
+
+  for (const rel of ir.relations || []) {
+    const srcEnt = ir.entities.find((e) => e.name === rel.sourceEntity);
+    const tgtEnt = ir.entities.find((e) => e.name === rel.targetEntity);
+    if (!srcEnt || !tgtEnt) continue;
+
+    // If both fields are already explicitly wired, keep as-is
+    if (rel.sourceField && rel.targetField) {
+      pushUniqueRel(rel);
+      continue;
+    }
+
+    // Otherwise (AI relation without explicit field handles), match against srcEnt's PK fields
+    const srcPkFields = SeedEngine.getEntityPkFields(srcEnt);
+    let matchedCount = 0;
+
+    for (const pkField of srcPkFields) {
+      const prefix = srcEnt.name.toLowerCase().replace(/s$/, '');
+      const matchedFk = tgtEnt.fields.find((f) => {
+        const fLow = f.name.toLowerCase();
+        const pkLow = pkField.toLowerCase();
+        if (pkLow !== 'id' && fLow === pkLow) return true;
+        if (fLow === `${prefix}_${pkLow}` || fLow === `${prefix}${pkLow}`) return true;
+        if (pkLow === 'id' && fLow === `${prefix}_id`) return true;
+        return false;
+      });
+
+      if (matchedFk) {
+        matchedCount++;
+        pushUniqueRel({
+          ...rel,
+          sourceField: pkField,
+          targetField: matchedFk.name,
+        });
+      }
+    }
+
+    // If AI didn't name the FK column consistently, bind the first PK field so the Incomplete FK warning triggers
+    if (matchedCount === 0 && srcPkFields[0]) {
+      const fallbackFk =
+        tgtEnt.fields.find((f) => !(f.isPrimaryKey ?? f.name === 'id')) ||
+        tgtEnt.fields[0];
+      if (fallbackFk) {
+        pushUniqueRel({
+          ...rel,
+          sourceField: srcPkFields[0],
+          targetField: fallbackFk.name,
+        });
+      } else {
+        pushUniqueRel(rel);
+      }
+    }
+  }
+
+  return {
+    ...ir,
+    relations: expandedRelations,
+  };
+};
+
 export const useArchitectureStore = create<ArchitectureState>((set, get) => {
   const syncUINodes = (newIR: CanonicalIR, currentNodes: Node<UINodeData>[]) => {
     const nodeMap = new Map(currentNodes.map((n) => [n.id, n]));
@@ -838,21 +909,23 @@ export const useArchitectureStore = create<ArchitectureState>((set, get) => {
     applyAIPatch: (newIR: CanonicalIR) => {
       const { present, projectId, past, nodes } = get();
       const safeNotes = normalizeNotes(newIR.notes ?? present.notes);
-      const safeIR: CanonicalIR = {
+      
+      const normalizedIR = normalizeAIRelations({
         ...newIR,
         customSql: newIR.customSql ?? present.customSql ?? [],
         notes: safeNotes as any,
-      };
+      });
+
       set({
         past: [...past, present].slice(-50),
-        present: safeIR,
+        present: normalizedIR,
         notes: safeNotes,
         future: [],
-        nodes: syncUINodes(safeIR, nodes),
+        nodes: syncUINodes(normalizedIR, nodes),
         isDirty: true,
         syncStatus: 'syncing',
       });
-      if (projectId) persistToDB(projectId, safeIR);
+      if (projectId) persistToDB(projectId, normalizedIR);
     },
 
     undo: () => {
