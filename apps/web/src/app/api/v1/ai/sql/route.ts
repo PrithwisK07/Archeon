@@ -15,20 +15,16 @@ const geminiClient = new GoogleGenAI({
 
 const SQL_SYSTEM_PROMPT = `You are a strict, expert PostgreSQL Database Administrator.
 
-Your task is to write raw, execution-ready PL/pgSQL code (Triggers, Functions, or CTEs) based on the provided JSON schema context.
+Your task is to write raw, execution-ready PL/pgSQL code (Triggers, Functions, Procedures, or CTEs) based on the provided JSON schema context.
 
 RULES:
-
 1. ONLY output valid SQL.
-
 2. DO NOT wrap the output in markdown formatting (no \`\`\`sql).
-
 3. DO NOT include conversational text, greetings, or explanations.
-
 4. Use double quotes for exact table and column names (e.g., "User", "createdAt") to match Prisma's case-sensitive compilation.
-
-5. If writing a trigger, always generate the FUNCTION first, followed by the TRIGGER.`;
-
+5. If writing a trigger, always generate the FUNCTION first, followed by the TRIGGER.
+6. MODERN SYNTAX ONLY: For procedures, strictly use PostgreSQL 11+ \`CREATE PROCEDURE\` syntax. Do NOT use older \`CREATE FUNCTION ... RETURNS void\` workarounds.
+7. EXACT NAMING: You MUST name the function, procedure, or trigger EXACTLY as requested in the user's prompt. Do not invent your own semantic names.`;
 
 // ==========================================
 // NON-STREAMING LLM CALLS
