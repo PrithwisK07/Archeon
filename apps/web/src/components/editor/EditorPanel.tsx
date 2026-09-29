@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo, useEffect } from 'react';
-import Editor from '@monaco-editor/react';
+import Editor, { useMonaco } from '@monaco-editor/react';
 import { useArchitectureStore } from '../../store/architectureStore';
 import {
   buildStudioFileMap,
@@ -66,6 +66,66 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
     }
   }, [activeFile, studioFiles]);
 
+  const monaco = useMonaco();
+
+  // 1. Inject Types and Compiler Options
+  useEffect(() => {
+    if (monaco) {
+      const monacoTs = (monaco.languages as any).typescript;
+
+      // FORCE the TS worker to analyze background files instantly
+      monacoTs.typescriptDefaults.setEagerModelSync(true); 
+
+      monacoTs.typescriptDefaults.setCompilerOptions({
+        target: monacoTs.ScriptTarget.ES2020,
+        allowNonTsExtensions: true,
+        moduleResolution: monacoTs.ModuleResolutionKind.NodeJs,
+        module: monacoTs.ModuleKind.CommonJS,
+        baseUrl: '.',
+      });
+
+      // Inject process.env, express, and @prisma/client types!
+      monacoTs.typescriptDefaults.addExtraLib(
+        `
+        declare var process: { env: { PORT?: string; DATABASE_URL?: string; [key: string]: string | undefined; } };
+        declare module 'express' {
+          export interface Request { body: any; params: any; query: any; }
+          export interface Response { json: (data: any) => void; status: (code: number) => Response; send: (data?: any) => void; }
+          export interface Router { get: any; post: any; put: any; delete: any; use: any; }
+          export function Router(): Router;
+          const express: () => any;
+          export default express;
+        }
+        declare module '@prisma/client' {
+          export class PrismaClient { [key: string]: any; }
+        }
+        `,
+        'file:///node_modules_mock.d.ts'
+      );
+    }
+  }, [monaco]);
+
+  // 2. Pre-load ALL files into Monaco's virtual file system so cross-file imports work instantly
+  useEffect(() => {
+    if (!monaco) return;
+    
+    Object.entries(studioFiles).forEach(([filePath, content]) => {
+      const uri = monaco.Uri.parse(`file:///${filePath}`);
+      const model = monaco.editor.getModel(uri);
+      
+      if (!model) {
+        const { monacoLang } = getFileLanguageLabel(filePath);
+        monaco.editor.createModel(
+          content, 
+          monacoLang === 'typescript' ? 'typescript' : monacoLang, 
+          uri
+        );
+      } else if (model.getValue() !== content && filePath !== activeFile) {
+        model.setValue(content);
+      }
+    });
+  }, [monaco, studioFiles, activeFile]);
+
   const handleSelectFile = (path: string) => {
     if (!openTabs.includes(path)) {
       setOpenTabs((prev) => [...prev, path]);
@@ -87,6 +147,28 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
   };
 
   const handleEditorWillMount = (monaco: any) => {
+    // 1. Configure TypeScript to resolve relative Node.js imports
+    monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+      target: monaco.languages.typescript.ScriptTarget.ES2020,
+      allowNonTsExtensions: true,
+      moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+      module: monaco.languages.typescript.ModuleKind.CommonJS,
+      baseUrl: '.',
+    });
+
+    // 2. Inject Node.js types (process.env)
+    monaco.languages.typescript.typescriptDefaults.addExtraLib(
+      `declare var process: {
+        env: {
+          PORT?: string;
+          DATABASE_URL?: string;
+          [key: string]: string | undefined;
+        }
+      };`,
+      'file:///node.d.ts'
+    );
+
+    // 3. Define syntax theme
     monaco.editor.defineTheme('nexus-dark', {
       base: 'vs-dark',
       inherit: true,
@@ -354,6 +436,8 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
 
           <Editor
             height="100%"
+            // THE CRITICAL FIX: Treat activeFile as a URI so relative paths connect!
+            path={activeFile ? `file:///${activeFile}` : undefined}
             language={monacoLang}
             theme="nexus-dark"
             value={fileContent}

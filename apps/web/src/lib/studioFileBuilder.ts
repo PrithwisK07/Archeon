@@ -73,20 +73,21 @@ export function buildStudioFileMap(
       compiledFiles['prisma/migrations/0_custom_behavior_injections/migration.sql'];
   }
 
-  // 2. Server Entry & Prisma Client Lib
+// 2. Server Entry & Prisma Client Lib
   const entityImports = ir.entities
     .map(
       (e) =>
-        `import ${e.name.toLowerCase()}Routes from "./routes/${e.name.toLowerCase()}.routes";`
+        `import { ${e.name.toLowerCase()}Router } from "./routes/${e.name.toLowerCase()}.routes";`
     )
     .join('\n');
   const entityMounts = ir.entities
-    .map((e) => `app.use("/v1/${e.name.toLowerCase()}", ${e.name.toLowerCase()}Routes);`)
+    .map(
+      (e) => `app.use("/v1/${e.name.toLowerCase()}", ${e.name.toLowerCase()}Router);`
+    )
     .join('\n');
 
-  files['src/server.ts'] =
-    compiledFiles?.['src/index.ts'] ||
-    `import express from "express";\n${entityImports}\n\nconst app = express();\napp.use(express.json());\n\n${entityMounts}\n\nconst PORT = process.env.PORT || 3000;\napp.listen(PORT, () => {\n  console.log(\`Archeon API running on port \${PORT}\`);\n});\n`;
+  // CHANGE HERE: Removed compiledFiles?.['src/server.ts'] so it always auto-syncs
+  files['src/server.ts'] = `import express from "express";\n${entityImports}\n\nconst app = express();\napp.use(express.json());\n\n${entityMounts}\n\nconst PORT = process.env.PORT || 3000;\napp.listen(PORT, () => {\n  console.log(\`Archeon API running on port \${PORT}\`);\n});\n`;
 
   files['src/lib/prisma.ts'] = `import { PrismaClient } from "@prisma/client";\n\nexport const prisma = new PrismaClient();\n`;
 
@@ -95,20 +96,97 @@ export function buildStudioFileMap(
     const slug = entity.name.toLowerCase();
     const pascal = entity.name.charAt(0).toUpperCase() + entity.name.slice(1);
 
-    const extRouteKey = `src/routes/${entity.name}Routes.ts`;
-    files[`src/routes/${slug}.routes.ts`] =
+    // 3A. Auto-Generated Base Router (Overwritten on compilation)
+    files[`src/routes/base/_Base${pascal}Routes.ts`] = `// AUTO-GENERATED BASE ROUTER - DO NOT EDIT DIRECTLY
+import { Router } from "express";
+import * as ${slug}Service from "../../services/${slug}.service";
+
+export const _base${pascal}Router = Router();
+
+_base${pascal}Router.get("/", async (_req, res) => {
+  const items = await ${slug}Service.list${pascal}();
+  res.json(items);
+});
+
+_base${pascal}Router.get("/:id", async (req, res) => {
+  const item = await ${slug}Service.get${pascal}(req.params.id);
+  if (!item) return res.status(404).json({ error: "Not found" });
+  res.json(item);
+});
+
+_base${pascal}Router.post("/", async (req, res) => {
+  const created = await ${slug}Service.create${pascal}(req.body);
+  res.status(201).json(created);
+});
+
+_base${pascal}Router.put("/:id", async (req, res) => {
+  const updated = await ${slug}Service.update${pascal}(req.params.id, req.body);
+  res.json(updated);
+});
+
+_base${pascal}Router.delete("/:id", async (req, res) => {
+  await ${slug}Service.delete${pascal}(req.params.id);
+  res.status(204).send();
+});
+`;
+
+    // 3B. Extension Router (Preserved if user modifies it)
+    const extRouteKey = `src/routes/${slug}.routes.ts`;
+    files[extRouteKey] =
       compiledFiles?.[extRouteKey] ||
-      `// Auto-generated Express router for ${entity.name}\nimport { Router } from "express";\nimport * as ${slug}Service from "../services/${slug}.service";\n\nconst router = Router();\n\nrouter.get("/", async (_req, res) => {\n  const items = await ${slug}Service.list${pascal}();\n  res.json(items);\n});\n\nrouter.get("/:id", async (req, res) => {\n  const item = await ${slug}Service.get${pascal}(req.params.id);\n  if (!item) return res.status(404).json({ error: "Not found" });\n  res.json(item);\n});\n\nrouter.post("/", async (req, res) => {\n  const created = await ${slug}Service.create${pascal}(req.body);\n  res.status(201).json(created);\n});\n\nrouter.put("/:id", async (req, res) => {\n  const updated = await ${slug}Service.update${pascal}(req.params.id, req.body);\n  res.json(updated);\n});\n\nrouter.delete("/:id", async (req, res) => {\n  await ${slug}Service.delete${pascal}(req.params.id);\n  res.status(204).send();\n});\n\nexport default router;\n`;
+      `import { Router } from "express";
+import { _base${pascal}Router } from "./base/_Base${pascal}Routes";
 
-    files[`src/controllers/${slug}.controller.ts`] = `// Controller layer for ${entity.name}\nimport { Request, Response } from "express";\nimport * as ${slug}Service from "../services/${slug}.service";\n\nexport async function handleList(_req: Request, res: Response) {\n  const data = await ${slug}Service.list${pascal}();\n  return res.json(data);\n}\n`;
+export const ${slug}Router = Router();
 
-    files[`src/services/${slug}.service.ts`] = `// Auto-generated CRUD service for ${entity.name}\nimport { prisma } from "../lib/prisma";\n\nexport async function list${pascal}() {\n  return prisma.${slug}.findMany();\n}\n\nexport async function get${pascal}(id: string) {\n  return prisma.${slug}.findUnique({ where: { id } });\n}\n\nexport async function create${pascal}(data: any) {\n  return prisma.${slug}.create({ data });\n}\n\nexport async function update${pascal}(id: string, data: any) {\n  return prisma.${slug}.update({ where: { id }, data });\n}\n\nexport async function delete${pascal}(id: string) {\n  return prisma.${slug}.delete({ where: { id } });\n}\n`;
+// EXTENSION ROUTER
+// Add custom middleware, overrides, or new endpoints here.
+// e.g., ${slug}Router.get('/custom/search', (req, res) => { ... });
+
+// Mount the auto-generated CRUD routes
+${slug}Router.use('/', _base${pascal}Router);
+`;
+
+    files[`src/controllers/${slug}.controller.ts`] = `// Controller layer for ${entity.name}
+import { Request, Response } from "express";
+import * as ${slug}Service from "../services/${slug}.service";
+
+export async function handleList(_req: Request, res: Response) {
+  const data = await ${slug}Service.list${pascal}();
+  return res.json(data);
+}
+`;
+
+    files[`src/services/${slug}.service.ts`] = `// Auto-generated CRUD service for ${entity.name}
+import { prisma } from "../lib/prisma";
+
+export async function list${pascal}() {
+  return prisma.${slug}.findMany();
+}
+
+export async function get${pascal}(id: string) {
+  return prisma.${slug}.findUnique({ where: { id } });
+}
+
+export async function create${pascal}(data: any) {
+  return prisma.${slug}.create({ data });
+}
+
+export async function update${pascal}(id: string, data: any) {
+  return prisma.${slug}.update({ where: { id }, data });
+}
+
+export async function delete${pascal}(id: string) {
+  return prisma.${slug}.delete({ where: { id } });
+}
+`;
   }
 
   // 4. Preserve any in-memory edits the user made directly in EditorPanel
   if (compiledFiles) {
     Object.entries(compiledFiles).forEach(([k, v]) => {
-      if (files[k] !== undefined) {
+      // Do not overwrite base routes from cache to ensure schema changes always sync
+      if (files[k] !== undefined && !k.includes('/base/_Base')) {
         files[k] = v;
       }
     });
@@ -182,6 +260,7 @@ export function buildFileTree(filePaths: string[]): TreeNode[] {
     'server.ts': 1,
     lib: 2,
     routes: 3,
+    base: 3.5,
     controllers: 4,
     services: 5,
     'package.json': 90,
