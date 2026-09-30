@@ -13,13 +13,15 @@ import {
 import { coerceCellValue, createBlankRow } from './seeder/valueGenerator';
 import { generateRowsForEntity } from './seeder/rowGenerator';
 import {
-  clearTableWithIntegrity,
-  deleteRowWithIntegrity,
   reconcileAllForeignKeys,
   synchronizeSchemaAndData,
   updateCellWithIntegrity,
   validateRowConstraints,
 } from './seeder/integrityManager';
+import {
+  clearTableWithIntegrity,
+  deleteRowWithIntegrity,
+} from './seeder/cascadeEngine';
 
 export {
   isFieldPk,
