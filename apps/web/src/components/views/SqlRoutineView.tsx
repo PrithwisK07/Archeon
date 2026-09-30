@@ -26,6 +26,12 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
   const [isGenerating, setIsGenerating] = useState(false);
   const editorRef = useRef<any>(null);
 
+  // FIX: Track the latest editing state for the Monaco command closure
+  const isEditingRef = useRef(isEditing);
+  useEffect(() => {
+    isEditingRef.current = isEditing;
+  }, [isEditing]);
+
   useMonacoSetup();
 
   useEffect(() => {
@@ -46,7 +52,8 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
     monacoInstance.editor.setTheme('nexus-dark');
     
     editor.addCommand(monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyK, () => {
-      if (isEditing) {
+      // Access the ref instead of the stale state closure
+      if (isEditingRef.current) {
         setShowAIPrompt((prev) => !prev);
       } else {
         showToast("Click 'Edit SQL' first to use the AI assistant.");
