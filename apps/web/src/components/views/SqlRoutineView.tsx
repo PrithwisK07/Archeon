@@ -17,21 +17,17 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
   const [copied, setCopied] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   
-  // Local state for edits before saving
   const [localName, setLocalName] = useState(routine.name);
   const [localSql, setLocalSql] = useState(routine.sql);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
-  // AI Inline State
   const [showAIPrompt, setShowAIPrompt] = useState(false);
   const [aiPromptText, setAiPromptText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const editorRef = useRef<any>(null);
 
-  // Initializes the nexus-dark theme globally
   useMonacoSetup();
 
-  // Sync local state if the routine changes externally
   useEffect(() => {
     setLocalName(routine.name);
     setLocalSql(routine.sql);
@@ -49,7 +45,6 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
     editorRef.current = editor;
     monacoInstance.editor.setTheme('nexus-dark');
     
-    // Bind Cmd/Ctrl + K
     editor.addCommand(monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyK, () => {
       if (isEditing) {
         setShowAIPrompt((prev) => !prev);
@@ -100,7 +95,6 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
       setLocalSql(updatedSql);
       setShowAIPrompt(false);
       
-      // Persistent Memory: Log to Copilot Chat History so the AI retains context
       addChatMessage({ role: 'user', content: `Edit SQL ${routine.name}: ${aiPromptText}` });
       addChatMessage({ role: 'ai', content: `Injected modifications into ${routine.name}.` });
       
@@ -195,23 +189,22 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
             type="text"
             value={localName}
             onChange={(e) => setLocalName(e.target.value)}
-            className="font-mono text-[15px] font-semibold bg-[#101219] border border-white/[0.2] focus:border-[#8b7ff0] rounded px-2 py-0.5 outline-none text-[#e8e8ee] min-w-[250px]"
+            className="font-mono text-[15px] font-semibold bg-transparent hover:bg-white/[0.03] focus:bg-[#101219] border border-transparent focus:border-[#8b7ff0]/50 rounded-lg px-2.5 py-1 outline-none text-[#e8e8ee] min-w-[250px] transition-all focus:shadow-[0_0_0_3px_rgba(139,127,240,0.15)]"
             placeholder="Routine name..."
           />
         ) : (
-          <span className="font-mono text-[15px] font-semibold">{routine.name}</span>
+          <span className="font-mono text-[15px] font-semibold px-2.5 py-1">{routine.name}</span>
         )}
 
         <div className="flex-1" />
 
-        {/* Edit / Save Controls */}
         {isEditing ? (
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setShowAIPrompt(!showAIPrompt)}
               title="Inline AI Code Generator (Cmd+K)"
-              className="px-2 py-0.5 rounded bg-white/[0.04] hover:bg-[#8b7ff0]/15 border border-white/[0.08] hover:border-[#8b7ff0]/40 text-[10.5px] font-mono text-[#8a8b9a] hover:text-[#8b7ff0] transition-colors cursor-pointer"
+              className="px-3 py-[6px] rounded bg-white/[0.04] hover:bg-[#8b7ff0]/15 border border-white/[0.08] hover:border-[#8b7ff0]/40 text-[10.5px] font-mono text-[#8a8b9a] hover:text-[#8b7ff0] transition-colors cursor-pointer"
             >
               <span>⌘ </span><span className="font-semibold text-[12px]">K</span>
             </button>
@@ -240,7 +233,6 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
           </button>
         )}
 
-        {/* Copy SQL Button */}
         <button
           type="button"
           onClick={handleCopy}
@@ -259,7 +251,6 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
           )}
         </button>
 
-        {/* Delete Routine Button */}
         <button
           type="button"
           onClick={handleDelete}
@@ -283,7 +274,6 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
         )}
       </div>
 
-      {/* Metadata Chips */}
       <div className="flex gap-2 mb-3 flex-wrap">
         <span className="text-[11px] font-mono text-[#8a8b9a] bg-white/[0.045] border border-white/[0.09] px-2.5 py-[5px] rounded-lg">Language: plpgsql</span>
         {routine.type === 'TRIGGER' && (
@@ -292,7 +282,6 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
         <span className="text-[11px] font-mono text-[#8a8b9a] bg-white/[0.045] border border-white/[0.09] px-2.5 py-[5px] rounded-lg">Table: {routine.targetEntity || '—'}</span>
       </div>
 
-      {/* Saved Prompt Banner */}
       {routine.prompt && !isEditing && (
         <div className="mb-3.5 px-3.5 py-2.5 rounded-xl bg-[#8b7ff0]/[0.08] border border-[#8b7ff0]/25 flex items-start gap-2.5">
           <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5 text-[#8b7ff0] mt-0.5 shrink-0"><path d="M13 2 3 14h7l-1 8 11-14h-7z" /></svg>
@@ -303,7 +292,6 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
         </div>
       )}
 
-      {/* Monaco Code Editor */}
       <div className="flex-1 border border-white/[0.09] rounded-xl bg-[#101219] overflow-hidden relative">
         <InlineAiPrompt
           showAIPrompt={showAIPrompt && isEditing}

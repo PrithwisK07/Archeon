@@ -45,7 +45,6 @@ export function CopilotDrawer({ onSubmit, isThinking }: CopilotDrawerProps) {
           : 'translate-x-full pointer-events-none'
       }`}
     >
-      {/* Copilot Header */}
       <div className="px-4 py-3.5 border-b border-white/[0.09] flex items-center gap-[9px]">
         <svg
           viewBox="0 0 24 24"
@@ -70,7 +69,6 @@ export function CopilotDrawer({ onSubmit, isThinking }: CopilotDrawerProps) {
         </button>
       </div>
 
-      {/* Copilot Messages Body */}
       <div
         ref={copilotBodyRef}
         className="flex-1 overflow-y-auto px-4 py-3.5 flex flex-col gap-3"
@@ -105,14 +103,13 @@ export function CopilotDrawer({ onSubmit, isThinking }: CopilotDrawerProps) {
                 : 'bg-[#8b7ff0]/10 border border-[#8b7ff0]/20 self-start'
             }`}
           >
-            {msg.role !== 'user' && (
-              <>
-                <b className={msg.role === 'warn' ? 'text-[#e08a3c]' : 'text-[#8b7ff0]'}>
-                  {msg.role === 'warn' ? 'Heads up' : 'Copilot'}
-                </b>
-                <br />
-              </>
-            )}
+            <b className={
+              msg.role === 'user' ? 'text-[#8a8b9a]' :
+              msg.role === 'warn' ? 'text-[#e08a3c]' : 'text-[#8b7ff0]'
+            }>
+              {msg.role === 'user' ? 'You' : msg.role === 'warn' ? 'Heads up' : 'Copilot'}
+            </b>
+            <br />
             {msg.content}
           </div>
         ))}
@@ -125,7 +122,6 @@ export function CopilotDrawer({ onSubmit, isThinking }: CopilotDrawerProps) {
         )}
       </div>
 
-      {/* Copilot Input Bar */}
       <div className="border-t border-white/[0.09] p-2.5 flex gap-2">
         <input
           type="text"
