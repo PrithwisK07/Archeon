@@ -1,5 +1,5 @@
 import { CopilotDrawer } from './CopilotDrawer';
-import { FieldInspectorDrawer } from './FieldInspectorDrawer';
+import { FieldInspectorDrawer } from './inspector/FieldInspectorDrawer';
 
 interface ChatConsoleProps {
   onSumbit: (prompt: string) => Promise<void>;
