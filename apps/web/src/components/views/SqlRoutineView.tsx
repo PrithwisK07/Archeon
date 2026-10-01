@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import Editor from '@monaco-editor/react';
+import { createClient } from '@supabase/supabase-js';
 import { useArchitectureStore } from '../../store/architectureStore';
 import type { CustomSqlSnippet } from '@zero-dollar/ir-core';
 import { useMonacoSetup } from '../../hooks/useMonacoSetup';
@@ -25,6 +26,11 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
   const [aiPromptText, setAiPromptText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const editorRef = useRef<any>(null);
+
+  const supabase = useMemo(() => createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY! 
+  ), []);
 
   // FIX: Track the latest editing state for the Monaco command closure
   const isEditingRef = useRef(isEditing);
@@ -66,11 +72,14 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
     setIsGenerating(true);
 
     try {
+      const { data: { session }} = await supabase.auth.getSession();
+      const token = session?.access_token;
+      
       const response = await fetch('/api/v1/ai/inline', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer development-token',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           prompt: `Targeting PostgreSQL routine '${routine.name}': ${aiPromptText}`,
