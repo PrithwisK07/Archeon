@@ -7,6 +7,7 @@ import {
   getFileLanguageLabel,
   TreeNode,
 } from '../../lib/studioFileBuilder';
+import { createClient } from '@supabase/supabase-js';
 
 interface EditorPanelProps {
   onClose: () => void;
@@ -25,6 +26,11 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
     () => buildStudioFileMap(present, compiledFiles),
     [present, compiledFiles]
   );
+
+  const supabase = useMemo(() => createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY! 
+  ), []);
 
   const allPaths = useMemo(() => Object.keys(studioFiles), [studioFiles]);
   const treeNodes = useMemo(() => buildFileTree(allPaths), [allPaths]);
@@ -205,11 +211,14 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
     setIsGenerating(true);
 
     try {
+      const { data: { session }} = await supabase.auth.getSession();
+      const token = session?.access_token;
+
       const response = await fetch('/api/v1/ai/inline', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer development-token',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           prompt: aiPromptText,

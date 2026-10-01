@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { createBrowserClient } from "@supabase/ssr";
+import { useState, useEffect, useMemo } from "react";
+import { createClient } from "@supabase/supabase-js";
 import { useArchitectureStore } from "../../store/architectureStore";
 import { buildStudioFileMap } from "../../lib/studioFileBuilder";
 
@@ -39,10 +39,10 @@ export function GitHubExportModal({
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const supabase = createBrowserClient(
+  const supabase = useMemo(() => createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
-  );
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY! 
+  ), []);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -131,10 +131,16 @@ export function GitHubExportModal({
       const lastUserMsg = [...(chatHistory || [])]
         .reverse()
         .find((m) => m.role === "user")?.content;
+        
+      const { data: { session }} = await supabase.auth.getSession();
+      const token = session?.access_token;
 
       const res = await fetch("/api/v1/export/github", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
         body: JSON.stringify({
           repoName: cleanRepo,
           files: filesPayload,
@@ -154,11 +160,18 @@ export function GitHubExportModal({
         setExportedRepoUrl(data.url);
       }
 
-      showToast(
-        exportedRepoUrl
-          ? `Pushed commit to ${cleanRepo}!`
-          : `Created & pushed to ${cleanRepo}!`
-      );
+      // FIX: Surface the AI-generated (or manual) commit message to the user
+      if (data.commitMessage) {
+        showToast(`Pushed: "${data.commitMessage}"`);
+      } else {
+        showToast(
+          exportedRepoUrl
+            ? `Pushed commit to ${cleanRepo}!`
+            : `Created & pushed to ${cleanRepo}!`
+        );
+      }
+
+      setCommitMessage(""); // Clear the input field for the next export
       onClose();
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to push to GitHub");

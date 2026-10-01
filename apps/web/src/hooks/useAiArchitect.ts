@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useReactFlow } from 'reactflow';
+import { createClient } from '@supabase/supabase-js';
 import { useArchitectureStore } from '../store/architectureStore';
 import { ContextOrchestrator } from '../lib/contextOrchestrator';
 import { ShadowGraph } from '@zero-dollar/compiler/src/shadowGraph';
@@ -7,7 +8,13 @@ import { ShadowGraph } from '@zero-dollar/compiler/src/shadowGraph';
 export function useAiArchitect() {
   const [isGenerating, setIsGenerating] = useState(false);
   const { fitView } = useReactFlow();
-  const { present, nodes, applyAIPatch, addChatMessage } = useArchitectureStore();
+  
+  const { present: presentAtStart, nodes, applyAIPatch, addChatMessage } = useArchitectureStore();
+  
+  const supabase = useMemo(() => createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY! 
+  ), []);
 
   const submitPrompt = useCallback(
     async (promptText: string) => {
@@ -17,17 +24,21 @@ export function useAiArchitect() {
 
       try {
         const selectedNode = nodes.find((n) => n.selected);
+        
         const contextMap = ContextOrchestrator.buildAIPayload(
-          present,
+          presentAtStart,
           promptText,
           selectedNode?.id
         );
+
+        const { data: { session }} = await supabase.auth.getSession();
+        const token = session?.access_token;
 
         const response = await fetch('/api/v1/ai/generate', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: 'Bearer development-token',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
           body: JSON.stringify({ prompt: promptText, contextMap, isVisionTask: false }),
         });
@@ -36,7 +47,10 @@ export function useAiArchitect() {
         if (!response.ok) throw new Error(data.error || `Gateway Error: ${response.statusText}`);
 
         addChatMessage({ role: 'ai', content: data.reasoning });
-        const newIR = ShadowGraph.simulateAndValidate(present, data.actions);
+        
+        const latestPresent = useArchitectureStore.getState().present;
+        
+        const newIR = ShadowGraph.simulateAndValidate(latestPresent, data.actions);
         applyAIPatch(newIR);
 
         setTimeout(() => fitView({ padding: 0.2, duration: 600 }), 100);
@@ -58,7 +72,7 @@ export function useAiArchitect() {
         setIsGenerating(false);
       }
     },
-    [isGenerating, nodes, present, applyAIPatch, addChatMessage, fitView]
+    [isGenerating, nodes, presentAtStart, applyAIPatch, addChatMessage, fitView, supabase]
   );
 
   return {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
+import { createClient } from "@supabase/supabase-js";
 import Groq from "groq-sdk";
 import { GoogleGenAI } from "@google/genai";
 
@@ -87,13 +87,26 @@ async function generateWithGemini(promptText: string): Promise<string> {
 
 export async function POST(req: NextRequest) {
   try {
-    const authHeader = req.headers.get("Authorization");
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return Response.json({ error: 'Missing or invalid authorization header' }, { status: 401 });
+    }
 
-    if (!authHeader) {
-      return NextResponse.json(
-        { error: "Unauthorized" },
-        { status: 401 }
-      );
+    const token = authHeader.split(' ')[1];
+    
+    // Instantiate supabase client with the user's JWT
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        global: { headers: { Authorization: `Bearer ${token}` } }
+      }
+    );
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return Response.json({ error: 'Unauthorized. Invalid session.' }, { status: 401 });
     }
 
     const { prompt, targetEntitySchema } = await req.json();

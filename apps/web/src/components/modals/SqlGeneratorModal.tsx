@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useArchitectureStore } from '../../store/architectureStore';
 import type { CustomSqlSnippet } from '@zero-dollar/ir-core';
+import { createClient } from '@supabase/supabase-js';
 
 export interface SqlModalState {
   isOpen: boolean;
@@ -32,6 +33,11 @@ export function SqlGeneratorModal({
 
   if (!modalState?.isOpen) return null;
 
+  const supabase = useMemo(() => createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY! 
+  ), []);
+
   const existingRoutines = (currentIR.customSql || []).filter(
     (r) => r.targetEntity === modalState.entityName
   );
@@ -41,13 +47,16 @@ export function SqlGeneratorModal({
     setIsGeneratingSql(true);
 
     try {
+      const { data: { session }} = await supabase.auth.getSession();
+      const token = session?.access_token;
+
       const targetEntity = currentIR.entities.find((e) => e.name === modalState.entityName);
 
       const response = await fetch('/api/v1/ai/sql', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer development-token',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           prompt: `[${modalState.routineType}] ${sqlPrompt}`,
