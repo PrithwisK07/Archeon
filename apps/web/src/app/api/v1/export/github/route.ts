@@ -206,7 +206,10 @@ export async function POST(req: NextRequest) {
           stream: false,
         });
 
-        return completion.choices[0]?.message?.content?.trim() || "";
+        const aiMessage = completion.choices[0]?.message?.content?.trim();
+        if (aiMessage) {
+          finalCommitMessage = aiMessage;
+        }
       } catch (e) {
         console.warn(
           "AI commit generation failed, falling back to default.",
