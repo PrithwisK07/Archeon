@@ -9,7 +9,7 @@ export function useAiArchitect() {
   const [isGenerating, setIsGenerating] = useState(false);
   const { fitView } = useReactFlow();
   
-  const { present: presentAtStart, nodes, applyAIPatch, addChatMessage } = useArchitectureStore();
+  const { nodes, applyAIPatch, addChatMessage } = useArchitectureStore();
   
   const supabase = useMemo(() => createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -23,10 +23,11 @@ export function useAiArchitect() {
       addChatMessage({ role: 'user', content: promptText });
 
       try {
+        const currentPresent = useArchitectureStore.getState().present;
         const selectedNode = nodes.find((n) => n.selected);
         
         const contextMap = ContextOrchestrator.buildAIPayload(
-          presentAtStart,
+          currentPresent,
           promptText,
           selectedNode?.id
         );
@@ -72,7 +73,7 @@ export function useAiArchitect() {
         setIsGenerating(false);
       }
     },
-    [isGenerating, nodes, presentAtStart, applyAIPatch, addChatMessage, fitView, supabase]
+    [isGenerating, nodes, applyAIPatch, addChatMessage, fitView, supabase]
   );
 
   return {

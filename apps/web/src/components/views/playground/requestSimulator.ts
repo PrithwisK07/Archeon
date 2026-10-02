@@ -97,19 +97,25 @@ export function executePlaygroundRequest(params: {
         });
       }
 
-      const updated: Record<string, any> = { ...rows[idx] };
+      let workingIR = present;
       Object.entries(parsed).forEach(([k, v]) => {
-        const fDef = targetEntity.fields.find((f) => f.name === k);
-        updated[k] = SeedEngine.coerceCellValue(fDef, v);
+        workingIR = SeedEngine.updateCellWithIntegrity(
+          workingIR,
+          targetEntity.name,
+          idx,
+          k,
+          v
+        );
       });
 
-      SeedEngine.validateRowConstraints(present, targetEntity.name, updated, idx);
-      rows[idx] = updated;
-      setEntitySeedData(targetEntity.name, rows);
+      applyAIPatch(workingIR);
       showToast(`200 OK — updated record in ${targetEntity.name}`);
 
+      const updatedEntity = workingIR.entities.find(e => e.name === targetEntity.name);
+      const finalUpdatedRow = updatedEntity?.seedData?.[idx] || {};
+
       return makeResponse(200, 'OK', `Successfully updated record "${targetId}" in ${targetEntity.name}`, {
-        statusCode: 200, status: 'OK', message: `Record updated successfully`, data: updated,
+        statusCode: 200, status: 'OK', message: `Record updated successfully`, data: finalUpdatedRow,
       });
     } catch (err: any) {
       const isConstraint = err.message?.includes('violation') || err.message?.includes('cardinality');

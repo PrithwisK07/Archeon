@@ -38,7 +38,12 @@ export class ResilientWorkerManager {
     this.spawnWorker();
   }
 
-  public async compileWithTimeout(irPayload: CanonicalIR, timeoutMs = 8000): Promise<Record<string, string>> {
+  // CRITICAL FIX: Add existingFiles to the signature
+  public async compileWithTimeout(
+    irPayload: CanonicalIR, 
+    existingFiles: Record<string, string> = {}, 
+    timeoutMs = 8000
+  ): Promise<Record<string, string>> {
     const jobId = ++this.compileVersion;
 
     return new Promise((resolve, reject) => {
@@ -59,7 +64,7 @@ export class ResilientWorkerManager {
             if (id === jobId) {
               rejectJob(new Error("Compilation timed out. Please simplify complex circular dependencies."));
             } else {
-              rejectJob(new Error("Worker terminated due to a timeout in another job.")); // Keep your existing else logic here
+              rejectJob(new Error("Worker terminated due to a timeout in another job.")); 
             }
           });
 
@@ -67,7 +72,8 @@ export class ResilientWorkerManager {
         }
       }, timeoutMs);
 
-      this.proxy.compileIRToCode(irPayload).then((res) => {
+      // CRITICAL FIX: Pass existingFiles to the Web Worker proxy
+      this.proxy.compileIRToCode(irPayload, existingFiles).then((res) => {
         clearTimeout(timer);
         if (this.pendingJobs.has(jobId)) {
           this.pendingJobs.delete(jobId);
