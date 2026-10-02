@@ -69,6 +69,12 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
     if (activeFile && studioFiles[activeFile] !== undefined) {
       setFileContent(studioFiles[activeFile]);
       setShowAIPrompt(false);
+    } else if (activeFile && studioFiles[activeFile] === undefined) {
+      const fallback = Object.keys(studioFiles)[0];
+      if (fallback) {
+        setActiveFile(fallback);
+        setOpenTabs((prev) => prev.filter((t) => t !== activeFile).concat(fallback));
+      }
     }
   }, [activeFile, studioFiles]);
 
@@ -115,19 +121,24 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
   useEffect(() => {
     if (!monaco) return;
     
+    const currentUris = new Set<string>();
+
     Object.entries(studioFiles).forEach(([filePath, content]) => {
       const uri = monaco.Uri.parse(`file:///${filePath}`);
-      const model = monaco.editor.getModel(uri);
+      currentUris.add(uri.toString());
       
+      const model = monaco.editor.getModel(uri);
       if (!model) {
         const { monacoLang } = getFileLanguageLabel(filePath);
-        monaco.editor.createModel(
-          content, 
-          monacoLang === 'typescript' ? 'typescript' : monacoLang, 
-          uri
-        );
+        monaco.editor.createModel(content, monacoLang === 'typescript' ? 'typescript' : monacoLang, uri);
       } else if (model.getValue() !== content && filePath !== activeFile) {
         model.setValue(content);
+      }
+    });
+
+    monaco.editor.getModels().forEach((model: any) => {
+      if (model.uri.toString() !== 'file:///node_modules_mock.d.ts' && !currentUris.has(model.uri.toString())) {
+        model.dispose();
       }
     });
   }, [monaco, studioFiles, activeFile]);
