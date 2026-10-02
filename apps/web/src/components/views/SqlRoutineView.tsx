@@ -141,6 +141,15 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
       return;
     }
 
+    const isDuplicate = present.customSql?.some(
+      (s) => s.name.toLowerCase() === cleanName.toLowerCase() && s.id !== routine.id
+    );
+    
+    if (isDuplicate) {
+      showToast(`A routine named "${cleanName}" already exists`);
+      return;
+    }
+
     dispatchManualAction({
       action: 'UPDATE_CUSTOM_SQL',
       id: routine.id,
