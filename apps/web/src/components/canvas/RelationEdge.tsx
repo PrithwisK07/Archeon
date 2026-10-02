@@ -1,26 +1,23 @@
-import { memo } from 'react';
-import {
-  EdgeProps,
-  EdgeLabelRenderer,
-  getSmoothStepPath,
-} from 'reactflow';
-import { useArchitectureStore } from '../../store/architectureStore';
-import { SeedEngine } from '../../lib/seedEngine';
-import type { UIEdgeData } from '../../lib/reactFlowAdapter';
-import type { Relation } from '@zero-dollar/ir-core';
+import { memo } from "react";
+import { EdgeProps, EdgeLabelRenderer, getSmoothStepPath } from "reactflow";
+import { useArchitectureStore } from "../../store/architectureStore";
+import { SeedEngine } from "../../lib/seedEngine";
+import type { UIEdgeData } from "../../lib/reactFlowAdapter";
+import type { Relation } from "@zero-dollar/ir-core";
+import { AlertTriangle, WandSparkles } from "lucide-react";
 
 const FALLBACK_COLORS = [
-  '#e08a3c', // amber
-  '#8b7ff0', // violet
-  '#3fc6d8', // cyan
-  '#e0708f', // rose
-  '#8fbf6b', // lime
+  "#e08a3c", // amber
+  "#8b7ff0", // violet
+  "#3fc6d8", // cyan
+  "#e0708f", // rose
+  "#8fbf6b", // lime
 ];
 
-const CARDINALITY_SHORT: Record<Relation['type'], string> = {
-  ONE_TO_ONE: '1:1',
-  ONE_TO_MANY: '1:N',
-  MANY_TO_MANY: 'N:M',
+const CARDINALITY_SHORT: Record<Relation["type"], string> = {
+  ONE_TO_ONE: "1:1",
+  ONE_TO_MANY: "1:N",
+  MANY_TO_MANY: "N:M",
 };
 
 export const RelationEdge = memo(
@@ -39,11 +36,8 @@ export const RelationEdge = memo(
     data,
     selected,
   }: EdgeProps<UIEdgeData>) => {
-    const {
-      present,
-      openInspector,
-      autoWireCompositeRelation,
-    } = useArchitectureStore();
+    const { present, openInspector, autoWireCompositeRelation } =
+      useArchitectureStore();
 
     const [edgePath, labelX, labelY] = getSmoothStepPath({
       sourceX,
@@ -55,22 +49,24 @@ export const RelationEdge = memo(
       borderRadius: 12,
     });
 
-    const handleSrcField = sourceHandleId?.replace(/^source-/, '');
-    const handleTgtField = targetHandleId?.replace(/^target-/, '');
+    const handleSrcField = sourceHandleId?.replace(/^source-/, "");
+    const handleTgtField = targetHandleId?.replace(/^target-/, "");
 
     const relIndex = present.relations.findIndex(
       (r) =>
         r.sourceEntity === source &&
         r.targetEntity === target &&
-        (!handleSrcField || !r.sourceField || r.sourceField === handleSrcField) &&
-        (!handleTgtField || !r.targetField || r.targetField === handleTgtField)
+        (!handleSrcField ||
+          !r.sourceField ||
+          r.sourceField === handleSrcField) &&
+        (!handleTgtField || !r.targetField || r.targetField === handleTgtField),
     );
 
     const relation: Relation | undefined =
       data?.relation ||
       (relIndex !== -1 ? present.relations[relIndex] : undefined) ||
       present.relations.find(
-        (r) => r.sourceEntity === source && r.targetEntity === target
+        (r) => r.sourceEntity === source && r.targetEntity === target,
       );
 
     const resolvedAll = SeedEngine.resolveAllRelations(present);
@@ -81,7 +77,7 @@ export const RelationEdge = memo(
         (r.rawRelation.sourceField === relation?.sourceField ||
           r.parentPkField === handleSrcField) &&
         (r.rawRelation.targetField === relation?.targetField ||
-          r.childFkField === handleTgtField)
+          r.childFkField === handleTgtField),
     );
 
     const isIncompleteComposite =
@@ -90,10 +86,11 @@ export const RelationEdge = memo(
     const baseColor =
       data?.colorHex ||
       FALLBACK_COLORS[
-        Math.abs(relIndex !== -1 ? relIndex : id.length) % FALLBACK_COLORS.length
+        Math.abs(relIndex !== -1 ? relIndex : id.length) %
+          FALLBACK_COLORS.length
       ];
 
-    const strokeColor = isIncompleteComposite ? '#e08a3c' : baseColor;
+    const strokeColor = isIncompleteComposite ? "#e08a3c" : baseColor;
 
     // Clicking the wire or badge opens the right-hand Inspector for the child FK column
     const handleOpenInSidebar = (e: React.MouseEvent) => {
@@ -104,9 +101,7 @@ export const RelationEdge = memo(
       }
       const targetEnt = present.entities.find((ent) => ent.name === target);
       const fieldToInspect =
-        relation?.targetField ||
-        handleTgtField ||
-        targetEnt?.fields[0]?.name;
+        relation?.targetField || handleTgtField || targetEnt?.fields[0]?.name;
       if (target && fieldToInspect) {
         openInspector(target, fieldToInspect);
       }
@@ -132,7 +127,7 @@ export const RelationEdge = memo(
           stroke={strokeColor}
           strokeWidth={selected ? 2.2 : 1.65}
           strokeOpacity={selected ? 1 : 0.78}
-          strokeDasharray={isIncompleteComposite ? '6 4' : undefined}
+          strokeDasharray={isIncompleteComposite ? "6 4" : undefined}
           onClick={handleOpenInSidebar}
           className="transition-colors duration-150 cursor-pointer"
         />
@@ -144,12 +139,10 @@ export const RelationEdge = memo(
         <EdgeLabelRenderer>
           <div
             style={{
-              position: 'absolute',
+              position: "absolute",
               transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-              pointerEvents: 'all',
-              borderColor: selected
-                ? strokeColor
-                : 'rgba(255, 255, 255, 0.09)',
+              pointerEvents: "all",
+              borderColor: selected ? strokeColor : "rgba(255, 255, 255, 0.09)",
             }}
             onClick={handleOpenInSidebar}
             title="Click to configure relation in sidebar"
@@ -167,29 +160,62 @@ export const RelationEdge = memo(
                   e.stopPropagation();
                   autoWireCompositeRelation(
                     resolvedRel.parentEntity,
-                    resolvedRel.childEntity
+                    resolvedRel.childEntity,
                   );
                 }}
                 title={`Missing composite key field(s): ${resolvedRel.missingParentPkFields.join(
-                  ', '
+                  ", ",
                 )}. Click to auto-wire.`}
-                className="flex items-center gap-1 text-[#e08a3c] font-semibold cursor-pointer"
+                className="
+                  group
+                  flex items-center gap-1.5
+                  rounded-full
+                  text-[#e08a3c]
+                  font-semibold
+                  cursor-pointer
+                  transition-all duration-150
+                  hover:text-[#f0a35d]
+                "
               >
-                <span>⚠️ 1/{resolvedRel.missingParentPkFields.length + 1} PK</span>
-                <span className="bg-[#e08a3c] text-[#1a1206] px-1 rounded-full text-[8.5px]">
+                <AlertTriangle
+                  size={11}
+                  strokeWidth={2.4}
+                  className="flex-none"
+                />
+
+                <span className="tabular-nums">
+                  1/{resolvedRel.missingParentPkFields.length + 1} PK
+                </span>
+
+                <span
+                  className="
+                    inline-flex items-center gap-0.5
+                    rounded-full
+                    bg-[#e08a3c]
+                    px-1.5 py-0.5
+                    text-[8px]
+                    font-bold
+                    uppercase tracking-wide
+                    text-[#1a1206]
+                    transition-all duration-150
+                    group-hover:bg-[#f0a35d]
+                    group-hover:shadow-[0_0_8px_rgba(224,138,60,0.25)]
+                  "
+                >
+                  <WandSparkles size={8} strokeWidth={2.5} />
                   Fix
                 </span>
               </button>
             ) : (
               <span style={{ color: strokeColor }} className="font-semibold">
-                {relation ? CARDINALITY_SHORT[relation.type] : '1:N'}
+                {relation ? CARDINALITY_SHORT[relation.type] : "1:N"}
               </span>
             )}
           </div>
         </EdgeLabelRenderer>
       </>
     );
-  }
+  },
 );
 
-RelationEdge.displayName = 'RelationEdge';
+RelationEdge.displayName = "RelationEdge";
