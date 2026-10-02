@@ -50,9 +50,15 @@ function CanvasInner() {
     canvasMode,
     toastMessage,
     showToast,
+    autoArrangeNodes,
+    
   } = useArchitectureStore();
 
   const { setCenter, getNode } = useReactFlow();
+
+  useEffect(() => {
+    autoArrangeNodes();
+  }, []);
   
   // Attach custom hooks
   useCanvasShortcuts();
