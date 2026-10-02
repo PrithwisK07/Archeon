@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { createBrowserClient } from "@supabase/ssr";
 import { useArchitectureStore } from "../../store/architectureStore";
 import { buildStudioFileMap } from "../../lib/studioFileBuilder";
 
@@ -39,7 +39,7 @@ export function GitHubExportModal({
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const supabase = useMemo(() => createClient(
+  const supabase = useMemo(() => createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY! 
   ), []);
@@ -64,13 +64,13 @@ export function GitHubExportModal({
 
     const checkGitHubAuth = async () => {
       setCheckingAuth(true);
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+
+      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
 
       const token =
         session?.provider_token ||
-        session?.user?.user_metadata?.github_token ||
+        user?.user_metadata?.github_token ||
         null;
 
       const username =
@@ -99,12 +99,29 @@ export function GitHubExportModal({
       provider: "github",
       options: {
         scopes: "repo read:user user:email",
+        queryParams: {
+          prompt: "consent",
+        },
         redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(
           returnPath
         )}`,
       },
     });
     if (error) setErrorMsg(error.message);
+  };
+
+  const handleDisconnect = async () => {
+    setCheckingAuth(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      await supabase.auth.updateUser({
+        data: { github_token: null, github_username: null }
+      });
+    }
+    setOauthToken(null);
+    setGithubUsername(null);
+    setCheckingAuth(false);
+    setErrorMsg("Disconnected. Please connect again to fetch a fresh token.");
   };
 
   const handleExport = async (e: React.FormEvent) => {
@@ -225,13 +242,22 @@ export function GitHubExportModal({
                   Connected{githubUsername ? ` as @${githubUsername}` : " via GitHub"}
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={() => setUseManualOverride(true)}
-                className="text-[11px] font-mono text-[#8a8b9a] hover:text-[#e8e8ee] underline cursor-pointer"
-              >
-                Use custom PAT
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleDisconnect}
+                  className="text-[11px] font-mono text-[#e0708f] hover:text-[#ff8fae] underline cursor-pointer"
+                >
+                  Disconnect
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUseManualOverride(true)}
+                  className="text-[11px] font-mono text-[#8a8b9a] hover:text-[#e8e8ee] underline cursor-pointer"
+                >
+                  Use custom PAT
+                </button>
+              </div>
             </div>
           ) : (
             <div className="p-3.5 rounded-xl bg-[#14161d] border border-white/[0.09] space-y-3">
