@@ -100,7 +100,8 @@ export function applyReferentialDeleteActions(
   workingIR: CanonicalIR,
   resolvedRels: ResolvedRelation[],
   entityName: string,
-  deletingRows: Record<string, any>[]
+  deletingRows: Record<string, any>[],
+  visited = new Set<string>() 
 ): number {
   let totalCascaded = 0;
   const activeRels = resolvedRels.filter((r) => r.isCompleteComposite);
@@ -112,7 +113,6 @@ export function applyReferentialDeleteActions(
     const childEntity = workingIR.entities.find((e) => e.name === group.childEntity);
     if (!childEntity || !childEntity.seedData?.length) continue;
 
-    // Match child rows that reference ANY of the deleting parent rows across all mapped key columns
     const deletingTupleSet = new Set(
       deletingRows.map((pRow) =>
         group.mappings.map((m) => String(pRow[m.parentPkField] ?? pRow.id)).join('::')
@@ -127,13 +127,17 @@ export function applyReferentialDeleteActions(
       ) {
         return false;
       }
-      const childTuple = group.mappings
-        .map((m) => String(cRow[m.childFkField]))
-        .join('::');
+      const childTuple = group.mappings.map((m) => String(cRow[m.childFkField])).join('::');
       return deletingTupleSet.has(childTuple);
     };
 
-    const dependentRows = childEntity.seedData.filter(isChildRowDependent);
+    const dependentRows = childEntity.seedData.filter((cRow) => {
+      if (!isChildRowDependent(cRow)) return false;
+      const uniqueRowKey = `${childEntity.name}::${getRowCompositeKey(childEntity, cRow)}`;
+      if (visited.has(uniqueRowKey)) return false; // Break the cycle
+      return true;
+    });
+
     if (dependentRows.length === 0) continue;
 
     const rule = group.onDelete || 'RESTRICT';
@@ -146,12 +150,18 @@ export function applyReferentialDeleteActions(
       );
     } else if (rule === 'CASCADE') {
       totalCascaded += dependentRows.length;
+      
+      dependentRows.forEach((r) => {
+        visited.add(`${childEntity.name}::${getRowCompositeKey(childEntity, r)}`);
+      });
+
       childEntity.seedData = childEntity.seedData.filter((r) => !isChildRowDependent(r));
       totalCascaded += applyReferentialDeleteActions(
         workingIR,
         resolvedRels,
         childEntity.name,
-        dependentRows
+        dependentRows,
+        visited // Pass the set down
       );
     } else if (rule === 'SET NULL') {
       for (const m of group.mappings) {

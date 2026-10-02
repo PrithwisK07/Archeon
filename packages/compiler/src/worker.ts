@@ -69,7 +69,7 @@ export class CompilerWorker {
       version: "1.0.0",
       private: true,
       scripts: {
-        "dev": "ts-node src/index.ts",
+        "dev": "ts-node src/server.ts",
         "build": "tsc",
         "db:generate": "prisma generate",
         "db:push": "prisma db push"
@@ -427,7 +427,7 @@ export class CompilerWorker {
     }
 
     const serverCode = `${imports}\nconst app = express();\napp.use(express.json());\n${mounts}\nconst PORT = process.env.PORT || 3000;\n\napp.listen(PORT, () => {\n  console.log(\`Server is running on http://localhost:\${PORT}\`);\n});\n`;
-    project.createSourceFile(`src/index.ts`, serverCode, { overwrite: true });
+    project.createSourceFile(`src/server.ts`, serverCode, { overwrite: true });
   }
 }
 
