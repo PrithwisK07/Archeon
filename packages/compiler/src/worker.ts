@@ -408,7 +408,8 @@ export class CompilerWorker {
   }
 
   private generateExtensionRoutes(project: Project, entity: Entity) {
-    const extPath = `src/routes/${entity.name}Routes.ts`;
+    const lowerName = entity.name.toLowerCase();
+    const extPath = `src/routes/${lowerName}.routes.ts`;
     
     if (!project.getSourceFile(extPath)) {
       const code = `import { Router } from 'express';\nimport { _base${entity.name}Router } from './base/_Base${entity.name}Routes';\n\nexport const ${entity.name.toLowerCase()}Router = Router();\n\n// EXTENSION ROUTER\n// Add custom middleware, overrides, or new endpoints here.\n// e.g., ${entity.name.toLowerCase()}Router.get('/custom/search', (req, res) => { ... });\n\n// Mount the auto-generated CRUD routes\n${entity.name.toLowerCase()}Router.use('/', _base${entity.name}Router);\n`;
@@ -422,7 +423,7 @@ export class CompilerWorker {
 
     for (const entity of ir.entities) {
       const routeName = `${entity.name.toLowerCase()}Router`;
-      imports += `import { ${routeName} } from './routes/${entity.name}Routes';\n`;
+      imports += `import { ${routeName} } from './routes/${entity.name.toLowerCase()}.routes';\n`;
       mounts += `app.use('/api/v1/${entity.name.toLowerCase()}s', ${routeName});\n`;
     }
 
