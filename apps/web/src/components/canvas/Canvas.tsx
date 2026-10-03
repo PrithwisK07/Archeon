@@ -231,7 +231,7 @@ function CanvasInner() {
                   canvasMode === 'select' ? '[&_.react-flow__pane]:!cursor-default' : '[&_.react-flow__pane]:!cursor-grab active:[&_.react-flow__pane]:!cursor-grabbing'
                 }`}
               >
-                <Background variant={BackgroundVariant.Dots} gap={26} size={1.4} color="rgba(255, 255, 255, 0.09)" />
+                <Background variant={BackgroundVariant.Dots} gap={26} size={2.25} color="rgba(255, 255, 255, 0.09)" />
               </ReactFlow>
               <StickyNotesLayer onAddTable={handleAddTable} />
             </>
