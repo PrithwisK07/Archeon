@@ -11,6 +11,7 @@ export async function POST(req: NextRequest) {
   try {
     // 1. SECURITY FIX: Validate Supabase session before accepting any GitHub operations
     const authHeader = req.headers.get("Authorization");
+    
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return NextResponse.json(
         { error: "Unauthorized. Missing authentication token." },

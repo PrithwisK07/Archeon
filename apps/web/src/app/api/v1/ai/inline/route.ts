@@ -27,40 +27,39 @@ RULES:
 
 4. Use the provided CanonicalIR schema context to ensure exact table and column names.
 
-5. Assume the context is a Node.js/Express environment using Prisma.`;
+5. Assume the context is a Node.js/Express environment using Prisma.
 
-async function generateWithGroq(promptText: string): Promise<string> {
+CRITICAL DIRECTIVE FOR CONVERSATIONS & ERRORS:
+If the history contains a [SYSTEM ERROR FROM PREVIOUS ACTION], read the error carefully and correct your code injection to resolve the error.`;
+
+async function generateWithGroq(messages: any[]): Promise<string> {
   const completion = await groq.chat.completions.create({
     model: "openai/gpt-oss-120b",
-    messages: [
-      {
-        role: "system",
-        content: INLINE_SYSTEM_PROMPT,
-      },
-      {
-        role: "user",
-        content: promptText,
-      },
-    ],
+    messages: messages,
     stream: false,
   });
 
   return completion.choices[0]?.message?.content || "";
 }
 
-async function generateWithGemini(promptText: string): Promise<string> {
+async function generateWithGemini(systemPrompt: string, history: any[], userPrompt: string): Promise<string> {
+  const contents = history.map((msg: any) => ({
+    role: msg.role === "assistant" ? "model" : "user",
+    parts: [{ text: msg.content }],
+  }));
+
+  contents.push({
+    role: "user",
+    parts: [{ text: userPrompt }],
+  });
+
   const response = await geminiClient.models.generateContent({
     model: "gemini-3.6-flash",
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: INLINE_SYSTEM_PROMPT + "\n\n" + promptText,
-          },
-        ],
-      },
-    ],
+    contents: contents,
+    config: {
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      responseMimeType: "text/plain",
+    }
   });
 
   if (!response || !response.text) {
@@ -78,6 +77,9 @@ export async function POST(req: NextRequest) {
     }
 
     const token = authHeader.split(' ')[1];
+    if (!token) {
+      return Response.json({ error: 'Missing or invalid authorization token' }, { status: 401 });
+    }
     
     // Instantiate supabase client with the user's JWT
     const supabase = createClient(
@@ -88,13 +90,13 @@ export async function POST(req: NextRequest) {
       }
     );
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
 
     if (authError || !user) {
       return Response.json({ error: 'Unauthorized. Invalid session.' }, { status: 401 });
     }
 
-    const { prompt, currentFileContent, schemaContext } = await req.json();
+    const { prompt, currentFileContent, schemaContext, history = [] } = await req.json();
 
     let attempt = 0;
     const maxAttempts = 3;
@@ -113,17 +115,23 @@ ${prompt}`;
 
       try {
         let generatedCode = "";
+        
+        const groqMessages = [
+          { role: "system", content: INLINE_SYSTEM_PROMPT },
+          ...history,
+          { role: "user", content: internalPrompt }
+        ];
 
         // 1. Try Groq first, then gracefully fall back to Gemini
         try {
-          generatedCode = await generateWithGroq(internalPrompt);
+          generatedCode = await generateWithGroq(groqMessages);
         } catch (err: any) {
           console.warn(
             `Groq failed (Attempt ${attempt}), falling back to Gemini...`,
             err.message
           );
 
-          generatedCode = await generateWithGemini(internalPrompt);
+          generatedCode = await generateWithGemini(INLINE_SYSTEM_PROMPT, history, internalPrompt);
         }
 
         // 2. Strip markdown formatting if the LLM disobeys the prompt
@@ -171,12 +179,7 @@ ${prompt}`;
         }
 
         // Give the next attempt additional context about the failure
-        internalPrompt += `
-
-SYSTEM WARNING: Your previous generation attempt failed with the following error:
-${error.message}
-
-You MUST return only the raw TypeScript/JavaScript code requested by the user.`;
+        internalPrompt += `\n\nSYSTEM WARNING: Your previous generation attempt failed with the following error:\n${error.message}\n\nYou MUST return only the raw TypeScript/JavaScript code requested by the user.`;
       }
     }
   } catch (error: any) {
