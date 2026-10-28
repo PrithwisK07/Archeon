@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import Editor from '@monaco-editor/react';
-import { createClient } from '@supabase/supabase-js';
+import { createBrowserClient } from '@supabase/ssr';
 import { useArchitectureStore } from '../../store/architectureStore';
 import type { CustomSqlSnippet } from '@zero-dollar/ir-core';
 import { useMonacoSetup } from '../../hooks/useMonacoSetup';
@@ -27,7 +27,7 @@ export function SqlRoutineView({ routine, onJumpToTable }: SqlRoutineViewProps) 
   const [isGenerating, setIsGenerating] = useState(false);
   const editorRef = useRef<any>(null);
 
-  const supabase = useMemo(() => createClient(
+  const supabase = useMemo(() => createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY! 
   ), []);

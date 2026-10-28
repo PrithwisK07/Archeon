@@ -7,7 +7,7 @@ import {
   getFileLanguageLabel,
   TreeNode,
 } from '../../lib/studioFileBuilder';
-import { createClient } from '@supabase/supabase-js';
+import { createBrowserClient } from '@supabase/ssr';
 
 interface EditorPanelProps {
   onClose: () => void;
@@ -27,7 +27,7 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
     [present, compiledFiles]
   );
 
-  const supabase = useMemo(() => createClient(
+  const supabase = useMemo(() => createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY! 
   ), []);
@@ -222,8 +222,17 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
     setIsGenerating(true);
 
     try {
+      const state = useArchitectureStore.getState();
       const { data: { session }} = await supabase.auth.getSession();
       const token = session?.access_token;
+
+      // Extract and format history for the LLM
+      const recentHistory = state.chatHistory.slice(-12).map((msg) => ({
+        role: msg.role === 'ai' ? 'assistant' : 'user',
+        content: msg.role === 'warn' 
+          ? `[SYSTEM ERROR FROM PREVIOUS ACTION]: ${msg.content}` 
+          : msg.content
+      }));
 
       const response = await fetch('/api/v1/ai/inline', {
         method: 'POST',
@@ -235,6 +244,7 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
           prompt: aiPromptText,
           currentFileContent: fileContent,
           schemaContext: present.entities,
+          history: recentHistory, // Pass formatted history
         }),
       });
 
@@ -261,10 +271,20 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
       setFileContent(updated);
       updateCompiledFile(activeFile, updated);
       setShowAIPrompt(false);
+      
+      // Log success to chat history for shared memory
+      state.addChatMessage({ role: 'user', content: `Inline edit in ${activeFile}: ${aiPromptText}` });
+      state.addChatMessage({ role: 'ai', content: `Injected code modifications into ${activeFile}.` });
+
       setAiPromptText('');
       showToast('Inline code injected');
     } catch (err: any) {
       console.error('Inline generation failed:', err);
+      // Log the exact error so the LLM can read it if the user asks for help
+      useArchitectureStore.getState().addChatMessage({ 
+        role: 'warn', 
+        content: `Inline generation failed: ${err.message}` 
+      });
       showToast('Failed to generate inline code snippet');
     } finally {
       setIsGenerating(false);
@@ -456,7 +476,6 @@ export function EditorPanel({ onClose }: EditorPanelProps) {
 
           <Editor
             height="100%"
-            // THE CRITICAL FIX: Treat activeFile as a URI so relative paths connect!
             path={activeFile ? `file:///${activeFile}` : undefined}
             language={monacoLang}
             theme="nexus-dark"

@@ -23,7 +23,8 @@ export function useAiArchitect() {
       addChatMessage({ role: 'user', content: promptText });
 
       try {
-        const currentPresent = useArchitectureStore.getState().present;
+        const state = useArchitectureStore.getState();
+        const currentPresent = state.present;
         const selectedNode = nodes.find((n) => n.selected);
         
         const contextMap = ContextOrchestrator.buildAIPayload(
@@ -31,6 +32,14 @@ export function useAiArchitect() {
           promptText,
           selectedNode?.id
         );
+
+        // Extract history and format errors as system context for the LLM
+        const recentHistory = state.chatHistory.slice(-12).map((msg) => ({
+          role: msg.role === 'ai' ? 'assistant' : 'user',
+          content: msg.role === 'warn' 
+            ? `[SYSTEM ERROR FROM PREVIOUS ACTION]: ${msg.content}` 
+            : msg.content
+        }));
 
         const { data: { session }} = await supabase.auth.getSession();
         const token = session?.access_token;
@@ -41,7 +50,12 @@ export function useAiArchitect() {
             'Content-Type': 'application/json',
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
-          body: JSON.stringify({ prompt: promptText, contextMap, isVisionTask: false }),
+          body: JSON.stringify({ 
+            prompt: promptText, 
+            contextMap, 
+            history: recentHistory, // Inject conversational memory
+            isVisionTask: false 
+          }),
         });
 
         const data = await response.json();
@@ -56,19 +70,13 @@ export function useAiArchitect() {
 
         setTimeout(() => fitView({ padding: 0.2, duration: 600 }), 100);
       } catch (err: any) {
-        let safeMessage =
-          'I encountered an internal conflict while processing that architecture. Could you try rephrasing?';
-        if (err.message.includes('Failed to generate a valid architecture')) {
-          safeMessage =
-            "I had trouble mapping that exact request to the strict database schema. Let's try adding those entities one at a time.";
-        } else if (
-          err.message.includes('fetch') ||
-          err.message.includes('Network') ||
-          err.message.includes('429')
-        ) {
-          safeMessage = 'The AI Gateway is experiencing heavy load. Please wait a moment and try again.';
-        }
-        addChatMessage({ role: 'warn', content: safeMessage });
+        const errorMessage = err.message || 'Unknown internal conflict';
+        
+        // Log the EXACT hard check error to the chat so the AI can read it next time
+        addChatMessage({ 
+          role: 'warn', 
+          content: `Action rejected by constraints: ${errorMessage}` 
+        });
       } finally {
         setIsGenerating(false);
       }

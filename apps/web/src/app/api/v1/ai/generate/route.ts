@@ -26,7 +26,13 @@ RULES:
 2. Never output markdown formatting (no \`\`\`json).
 3. Refer strictly to the provided Global Skeleton and Local Muscle contexts to avoid creating duplicates or targeting missing entities.
 4. NEVER inject string comments or conversational text inside the "actions" array. Every element in the array MUST be an action object.
-5. CRITICAL INSTRUCTION: You are strictly forbidden from inventing new "action" strings. You must ONLY use the exact action strings provided in the MasterAction union type (e.g., "ADD_ENTITY", "ADD_RELATION"). Do not use "ADD_TABLE" or "CREATE_RELATION".
+5. CRITICAL INSTRUCTION: You are strictly forbidden from inventing new "action" strings. You must ONLY use the exact action strings provided in the MasterAction union type.
+
+CRITICAL DIRECTIVE FOR CONVERSATIONS & ERRORS:
+1. If the user asks a question, requests an explanation, or asks for advice, provide your detailed response in the "reasoning" field and return an EMPTY "actions" array ([]).
+2. If the user prompt or the history contains a [SYSTEM ERROR FROM PREVIOUS ACTION], read the error carefully. Use the "reasoning" field to explain why your last patch violated the database constraints, and then emit the corrected JSON patch in the "actions" array. If it cannot be fixed, return an empty actions array and explain why.
+
+Do not attempt to execute actions if you are merely answering a question.
 
 // ==========================================
 // REQUIRED OUTPUT SCHEMA
@@ -175,7 +181,8 @@ const geminiResponseSchema = {
           targetPath: { type: "STRING" },
           targetMethod: { type: "STRING" },
           sourceEntity: { type: "STRING" },
-          sourceField: { type: "STRING" }
+          sourceField: { type: "STRING" },
+          payload: { type: "OBJECT", nullable: true } // CRITICAL FIX: Payload defined here
         },
         required: ["action"]
       }
@@ -188,13 +195,10 @@ const geminiResponseSchema = {
 // NON-STREAMING LLM CALLS
 // ==========================================
 
-async function generateWithGroq(promptText: string): Promise<string> {
+async function generateWithGroq(messages: any[]): Promise<string> {
   const completion = await groq.chat.completions.create({
     model: "openai/gpt-oss-120b", 
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: promptText },
-    ],
+    messages,
     response_format: { 
       type: "json_schema",
       json_schema: groqJsonSchema
@@ -205,20 +209,39 @@ async function generateWithGroq(promptText: string): Promise<string> {
   return completion.choices[0]?.message?.content || "";
 }
 
-async function generateWithGemini(promptText: string): Promise<string> {
+async function generateWithGemini(messages: any[]): Promise<string> {
+  // Format standard history messages to Gemini format
+  let systemContent = "";
+  const formattedContents = [];
+  
+  for (const msg of messages) {
+    if (msg.role === "system") {
+      systemContent += msg.content + "\n\n";
+    } else {
+      formattedContents.push({
+        role: msg.role === "assistant" ? "model" : "user",
+        parts: [{ text: msg.content }]
+      });
+    }
+  }
+
+  // Prepend the system prompt to the first user message if available
+  if (systemContent && formattedContents.length > 0) {
+    formattedContents[0].parts[0].text = systemContent + formattedContents[0].parts[0].text;
+  } else if (systemContent) {
+    formattedContents.push({ role: "user", parts: [{ text: systemContent }] });
+  }
+
   const response = await geminiClient.models.generateContent({
     model: "gemini-3.6-flash",
-    contents: [
-      { role: "user", parts: [{ text: SYSTEM_PROMPT + "\n\n" + promptText }] }
-    ],
+    contents: formattedContents,
     config: {
       responseMimeType: "application/json",
-      // @ts-ignore - The SDK types might lag behind the API capabilities for responseSchema
+      // @ts-ignore
       responseSchema: geminiResponseSchema
     }
   });
 
-  // Ensure we safely handle the text output
   if (!response || !response.text) {
     throw new Error("Gemini returned an empty response.");
   }
@@ -237,8 +260,10 @@ export async function POST(req: NextRequest) {
     }
 
     const token = authHeader.split(' ')[1];
-    
-    // Instantiate supabase client with the user's JWT
+    if (!token) {
+      return Response.json({ error: 'Missing or invalid authorization token' }, { status: 401 });
+    }
+
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
@@ -247,91 +272,79 @@ export async function POST(req: NextRequest) {
       }
     );
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
 
     if (authError || !user) {
       return Response.json({ error: 'Unauthorized. Invalid session.' }, { status: 401 });
     }
 
-    const { prompt, contextMap, isVisionTask } = await req.json();
+    // Capture history from the payload
+    const { prompt, contextMap, history = [], isVisionTask } = await req.json();
 
     let attempt = 0;
     const maxAttempts = 3;
+    let lastError = "";
 
-    // Initial combined prompt
-    let internalPrompt = `CONTEXT:\n${JSON.stringify(contextMap)}\n\nUSER PROMPT:\n${prompt}`;
+    // Build the core message chain
+    const baseMessages = [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...history,
+      { 
+        role: "user", 
+        content: `CONTEXT:\n${JSON.stringify(contextMap)}\n\nUSER PROMPT:\n${prompt}` 
+      }
+    ];
 
     while (attempt < maxAttempts) {
       attempt++;
       try {
         let rawResponse = "";
+        const currentMessages = [...baseMessages];
+        
+        // Inject feedback from Zod failures into the next LLM attempt
+        if (attempt > 1 && lastError) {
+          currentMessages.push({
+            role: "user",
+            content: `SYSTEM WARNING: Your previous output failed validation: ${lastError}. You MUST return strictly valid JSON matching the exact schema.`
+          });
+        }
 
-        // 1. Fetch raw output with built-in provider fallback
         if (isVisionTask) {
-          rawResponse = await generateWithGemini(internalPrompt);
+          rawResponse = await generateWithGemini(currentMessages);
         } else {
           try {
-            rawResponse = await generateWithGroq(internalPrompt);
+            rawResponse = await generateWithGroq(currentMessages);
           } catch (err: any) {
-            console.warn(
-              `Groq failed (Attempt ${attempt}), falling back to Gemini...`,
-              err.message
-            );
-            rawResponse = await generateWithGemini(internalPrompt);
+            console.warn(`Groq failed (Attempt ${attempt}), falling back to Gemini...`, err.message);
+            rawResponse = await generateWithGemini(currentMessages);
           }
         }
 
-        // 2. Clean and Repair JSON
-        const cleanText = rawResponse
-          .replace(/```json/g, "")
-          .replace(/```/g, "")
-          .trim();
-
+        const cleanText = rawResponse.replace(/```json/g, "").replace(/```/g, "").trim();
         const repairedJSON = jsonrepair(cleanText);
         let parsedData = JSON.parse(repairedJSON);
 
-        // 3. Auto-correct root array hallucinations structurally
         if (Array.isArray(parsedData)) {
-          parsedData = {
-            reasoning: "Applied complex structural changes based on prompt.",
-            actions: parsedData,
-          };
+          parsedData = { reasoning: "Applied complex structural changes based on prompt.", actions: parsedData };
         }
 
-        // 4. The Zod Gauntlet
         const validatedLLMResponse = LLMResponseSchema.parse(parsedData);
-
-        // 5. Success! Return perfectly validated JSON back to the client
         return NextResponse.json(validatedLLMResponse);
       } catch (error: any) {
-        console.warn(
-          `[Backend Retry ${attempt}/${maxAttempts}]:`,
-          error.message
-        );
+        console.warn(`[Backend Retry ${attempt}/${maxAttempts}]:`, error.message);
+        lastError = error.message;
 
-        // If we've exhausted retries, throw the final error to the client boundary
         if (attempt >= maxAttempts) {
           return NextResponse.json(
-            {
-              error: "Failed to generate a valid architecture after multiple attempts.",
-              details: error.message,
-            },
+            { error: "Failed to generate a valid architecture after multiple attempts.", details: error.message },
             { status: 422 }
           );
         }
 
-        // Engage exponential backoff if the error was network/rate-limit related
-        if (
-          error.message.includes("429") ||
-          error.message.includes("fetch") ||
-          error.message.includes("Network")
-        ) {
+        if (error.message.includes("429") || error.message.includes("fetch") || error.message.includes("Network")) {
           const backoffTime = Math.pow(2, attempt) * 1000;
           await new Promise((resolve) => setTimeout(resolve, backoffTime));
         }
-
-        // Modify the prompt for the next attempt by injecting the Zod validation failure
-        internalPrompt += `\n\nSYSTEM WARNING: Your previous output failed validation: ${error.message}. You MUST return strictly valid JSON matching the exact schema.`;
       }
     }
   } catch (error: any) {
