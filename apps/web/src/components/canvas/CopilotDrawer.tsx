@@ -111,8 +111,85 @@ export function CopilotDrawer({ onSubmit, isThinking }: CopilotDrawerProps) {
             }>
               {msg.role === 'user' ? 'You' : msg.role === 'warn' ? 'Heads up' : 'Copilot'}
             </b>
-            <div className="mt-1.5 prose prose-invert prose-p:leading-snug prose-pre:bg-[#0b0c10] prose-pre:border prose-pre:border-white/[0.09] prose-pre:rounded-md prose-code:text-[#b5adf2] prose-code:bg-white/[0.045] prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none max-w-none text-[12.5px]">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <div className="mt-1.5 max-w-none text-[12.5px] leading-[1.55] text-[#dedee7] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  h1: ({ children }) => (
+                    <h1 className="mt-4 mb-2 text-[16px] font-semibold leading-tight text-[#f1efff]">
+                      {children}
+                    </h1>
+                  ),
+                  h2: ({ children }) => (
+                    <h2 className="mt-4 mb-2 text-[14px] font-semibold leading-tight text-[#f1efff]">
+                      {children}
+                    </h2>
+                  ),
+                  h3: ({ children }) => (
+                    <h3 className="mt-3 mb-1.5 text-[13px] font-semibold text-[#f1efff]">
+                      {children}
+                    </h3>
+                  ),
+                  p: ({ children }) => <p className="my-2">{children}</p>,
+                  ul: ({ children }) => (
+                    <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>
+                  ),
+                  ol: ({ children }) => (
+                    <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>
+                  ),
+                  li: ({ children }) => <li className="pl-1">{children}</li>,
+                  strong: ({ children }) => (
+                    <strong className="font-semibold text-[#f1efff]">{children}</strong>
+                  ),
+                  a: ({ children, href }) => (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[#aaa2ff] underline decoration-[#8b7ff0]/50 underline-offset-2 hover:text-[#c0baff]"
+                    >
+                      {children}
+                    </a>
+                  ),
+                  blockquote: ({ children }) => (
+                    <blockquote className="my-2 border-l-2 border-[#8b7ff0]/60 pl-3 text-[#aaaab8]">
+                      {children}
+                    </blockquote>
+                  ),
+                  code: ({ children, className }) => (
+                    <code
+                      className={
+                        className
+                          ? 'font-mono text-[11px] text-[#c5bfff]'
+                          : 'rounded bg-white/[0.07] px-1 py-0.5 font-mono text-[11px] text-[#c5bfff]'
+                      }
+                    >
+                      {children}
+                    </code>
+                  ),
+                  pre: ({ children }) => (
+                    <pre className="my-2 max-w-full overflow-x-auto rounded-lg border border-white/[0.09] bg-[#0b0c10] p-3 text-[11px] leading-[1.55]">
+                      {children}
+                    </pre>
+                  ),
+                  hr: () => <hr className="my-3 border-white/[0.09]" />,
+                  table: ({ children }) => (
+                    <div className="my-2 max-w-full overflow-x-auto">
+                      <table className="w-full border-collapse text-left text-[11px]">{children}</table>
+                    </div>
+                  ),
+                  th: ({ children }) => (
+                    <th className="border border-white/[0.1] bg-white/[0.05] px-2 py-1.5 font-semibold text-[#f1efff]">
+                      {children}
+                    </th>
+                  ),
+                  td: ({ children }) => (
+                    <td className="border border-white/[0.1] px-2 py-1.5 align-top text-[#c8c8d2]">
+                      {children}
+                    </td>
+                  ),
+                }}
+              >
                 {msg.content}
               </ReactMarkdown>
             </div>
@@ -140,7 +217,7 @@ export function CopilotDrawer({ onSubmit, isThinking }: CopilotDrawerProps) {
           }}
           disabled={isThinking}
           placeholder="Ask copilot to change the schema…"
-          className="flex-1 bg-[#101219] border border-white/[0.09] focus:border-[#8b7ff0]/50 rounded-lg px-2.5 py-[9px] text-[#e8e8ee] text-[12.5px] outline-none disabled:opacity-50"
+          className="flex-1 h-[44px] bg-[#101219] border border-white/[0.09] focus:border-[#8b7ff0]/50 rounded-lg px-2.5 py-3 text-[#e8e8ee] text-[12.5px] outline-none disabled:opacity-50"
         />
         <button
           type="button"
