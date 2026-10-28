@@ -32,6 +32,12 @@ CRITICAL DIRECTIVE FOR CONVERSATIONS & ERRORS:
 1. If the user asks a question, requests an explanation, or asks for advice, provide your detailed response in the "reasoning" field and return an EMPTY "actions" array ([]).
 2. If the user prompt or the history contains a [SYSTEM ERROR FROM PREVIOUS ACTION], read the error carefully. Use the "reasoning" field to explain why your last patch violated the database constraints, and then emit the corrected JSON patch in the "actions" array. If it cannot be fixed, return an empty actions array and explain why.
 
+MARKDOWN FORMATTING FOR REASONING:
+1. The "reasoning" field must use concise Markdown when it improves readability.
+2. Use Markdown headings, bullet lists, numbered lists, bold text, and inline code where appropriate.
+3. Do not use Markdown code fences for the overall response. The outer response must remain valid JSON.
+4. Keep the "actions" field as structured JSON objects only. Never place Markdown or conversational text inside the "actions" array.
+
 Do not attempt to execute actions if you are merely answering a question.
 
 // ==========================================
