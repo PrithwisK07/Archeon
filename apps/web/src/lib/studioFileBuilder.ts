@@ -17,7 +17,7 @@ export function buildStudioFileMap(
 ): Record<string, string> {
   const files: Record<string, string> = {};
 
-  // 1. Prisma Schema (supports single @id, composite @@id, @@unique, and @@index)
+  // 1. Prisma Schema (supports single @id, composite @@id, @@unique, @@index, and COMPOSITE RELATIONS)
   let prismaCode = `generator client {\n  provider = "prisma-client-js"\n}\n\ndatasource db {\n  provider = "postgresql"\n  url      = env("DATABASE_URL")\n}\n\n`;
   for (const entity of ir.entities) {
     prismaCode += `model ${entity.name} {\n`;
@@ -27,6 +27,7 @@ export function buildStudioFileMap(
       .map((f) => f.name);
     const isCompositePk = pkFieldNames.length > 1;
 
+    // A. Print Fields
     for (const f of entity.fields) {
       const pType =
         f.type === 'number'
@@ -51,6 +52,34 @@ export function buildStudioFileMap(
       prismaCode += `  ${f.name} ${pType}${opt}${pk}${uq}\n`;
     }
 
+    // B. Group and Print Foreign Key Relations (MERGE COMPOSITE WIRES)
+    const childRels = ir.relations.filter((r) => r.targetEntity === entity.name);
+    const groupedFks = new Map<string, { parent: string; fields: string[]; references: string[]; onDelete?: string }>();
+
+    childRels.forEach((rel) => {
+      const groupKey = `${rel.sourceEntity}_${rel.targetEntity}`;
+      if (!groupedFks.has(groupKey)) {
+        groupedFks.set(groupKey, { parent: rel.sourceEntity, fields: [], references: [], onDelete: rel.onDelete });
+      }
+      const group = groupedFks.get(groupKey)!;
+      if (rel.targetField) group.fields.push(rel.targetField);
+      if (rel.sourceField) group.references.push(rel.sourceField);
+    });
+
+    groupedFks.forEach((group, key) => {
+      const del = group.onDelete && group.onDelete !== 'RESTRICT' ? `, onDelete: ${group.onDelete}` : '';
+      prismaCode += `  ${group.parent.toLowerCase()} ${group.parent} @relation("Rel_${key}", fields: [${group.fields.join(', ')}], references: [${group.references.join(', ')}]${del})\n`;
+    });
+
+    // C. Print Reverse Back-Relations (One-to-Many parent side)
+    const parentRels = ir.relations.filter((r) => r.sourceEntity === entity.name);
+    const groupedBackRels = new Set(parentRels.map(r => r.targetEntity));
+    groupedBackRels.forEach((childName) => {
+      const groupKey = `${entity.name}_${childName}`;
+      prismaCode += `  ${childName.toLowerCase()}s ${childName}[] @relation("Rel_${groupKey}")\n`;
+    });
+
+    // D. Print Composite Constraints
     if (isCompositePk) {
       prismaCode += `\n  @@id([${pkFieldNames.join(', ')}])\n`;
     }
@@ -65,15 +94,15 @@ export function buildStudioFileMap(
 
     prismaCode += `}\n\n`;
   }
-  files['prisma/schema.prisma'] =
-    compiledFiles?.['prisma/schema.prisma'] || prismaCode.trimEnd();
+  
+  files['prisma/schema.prisma'] = prismaCode.trimEnd();
 
   if (compiledFiles?.['prisma/migrations/0_custom_behavior_injections/migration.sql']) {
     files['prisma/migrations/migration.sql'] =
       compiledFiles['prisma/migrations/0_custom_behavior_injections/migration.sql'];
   }
 
-// 2. Server Entry & Prisma Client Lib
+  // 2. Server Entry & Prisma Client Lib
   const entityImports = ir.entities
     .map(
       (e) =>
@@ -86,7 +115,6 @@ export function buildStudioFileMap(
     )
     .join('\n');
 
-  // CHANGE HERE: Removed compiledFiles?.['src/server.ts'] so it always auto-syncs
   files['src/server.ts'] = `import express from "express";\n${entityImports}\n\nconst app = express();\napp.use(express.json());\n\n${entityMounts}\n\nconst PORT = process.env.PORT || 3000;\napp.listen(PORT, () => {\n  console.log(\`Archeon API running on port \${PORT}\`);\n});\n`;
 
   files['src/lib/prisma.ts'] = `import { PrismaClient } from "@prisma/client";\n\nexport const prisma = new PrismaClient();\n`;
@@ -185,8 +213,13 @@ export async function delete${pascal}(id: string) {
   // 4. Preserve any in-memory edits the user made directly in EditorPanel
   if (compiledFiles) {
     Object.entries(compiledFiles).forEach(([k, v]) => {
-      // Do not overwrite base routes from cache to ensure schema changes always sync
-      if (files[k] !== undefined && !k.includes('/base/_Base')) {
+      // FORCE ALWAYS FRESH: Do not overwrite base routes, schema.prisma, or server.ts from cache
+      if (
+        files[k] !== undefined && 
+        !k.includes('/base/_Base') &&
+        k !== 'prisma/schema.prisma' &&
+        k !== 'src/server.ts'
+      ) {
         files[k] = v;
       }
     });
