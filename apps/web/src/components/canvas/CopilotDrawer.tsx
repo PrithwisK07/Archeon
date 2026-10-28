@@ -41,7 +41,7 @@ export function CopilotDrawer({ onSubmit, isThinking }: CopilotDrawerProps) {
 
   return (
     <div
-      className={`absolute top-0 right-0 w-[320px] h-full z-30 bg-[#14161d] border-l border-white/[0.09] flex flex-col transition-transform duration-250 ease-[cubic-bezier(0.2,0.8,0.2,1)] ${
+      className={`absolute top-0 right-0 w-[450px] h-full z-30 bg-[#14161d] border-l border-white/[0.09] flex flex-col transition-transform duration-250 ease-[cubic-bezier(0.2,0.8,0.2,1)] ${
         isCopilotOpen
           ? 'translate-x-0 pointer-events-auto'
           : 'translate-x-full pointer-events-none'
