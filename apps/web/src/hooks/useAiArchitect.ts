@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useReactFlow } from 'reactflow';
-import { createClient } from '@supabase/supabase-js';
+import { createBrowserClient } from '@supabase/ssr';
 import { useArchitectureStore } from '../store/architectureStore';
 import { ContextOrchestrator } from '../lib/contextOrchestrator';
 import { ShadowGraph } from '@zero-dollar/compiler/src/shadowGraph';
@@ -11,7 +11,7 @@ export function useAiArchitect() {
   
   const { nodes, applyAIPatch, addChatMessage } = useArchitectureStore();
   
-  const supabase = useMemo(() => createClient(
+  const supabase = useMemo(() => createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY! 
   ), []);

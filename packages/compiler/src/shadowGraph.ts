@@ -12,12 +12,54 @@ export class ShadowGraph {
     // 1. Deep clone ensures the live Zustand state is NEVER mutated
     const shadowIR: CanonicalIR = JSON.parse(JSON.stringify(currentIR));
 
-    // 2. Apply AI Actions to the Candidate IR
+    // 2. Pre-validate specific dangerous actions before applying them
+    for (const action of actions) {
+      if (action.action === 'UPDATE_FIELD' || action.action === 'ADD_FIELD') {
+        const payload = action.payload as any;
+        
+        const entity = shadowIR.entities.find((e) => e.name === action.targetEntity);
+        const field = action.action === 'UPDATE_FIELD'
+          ? entity?.fields.find((f) => f.name === action.targetField)
+          : undefined;
+        
+        const isCurrentlyPk = field?.isPrimaryKey;
+        const isBecomingPk = payload.isPrimaryKey === true;
+        const isPk = isCurrentlyPk || isBecomingPk;
+
+        const nextType = payload.type || field?.type;
+
+        if (isPk && nextType) {
+          const invalidPkTypes = ['boolean', 'json', 'datetime', 'text'];
+          if (invalidPkTypes.includes(nextType.toLowerCase())) {
+            throw new Error(
+              `Schema Error: Primary keys cannot be of type '${nextType}'. They must be 'uuid', 'string', or 'number'.`
+            );
+          }
+        }
+      }
+      
+      if (action.action === 'ADD_ENTITY') {
+        const payload = action.payload as any;
+        const fields = payload.fields || [];
+        for (const f of fields) {
+          if (f.isPrimaryKey) {
+             const invalidPkTypes = ['boolean', 'json', 'datetime', 'text'];
+             if (invalidPkTypes.includes(f.type?.toLowerCase())) {
+               throw new Error(
+                 `Schema Error: Primary key '${f.name}' in new table cannot be of type '${f.type}'.`
+               );
+             }
+          }
+        }
+      }
+    }
+
+    // 3. Apply AI Actions to the Candidate IR
     for (const action of actions) {
       this.applyAction(shadowIR, action);
     }
 
-    // 3. Post-Patch Validation: Semantic Integrity
+    // 4. Post-Patch Validation: Semantic Integrity
     this.validateSemanticInvariants(shadowIR);
 
     return shadowIR;
@@ -164,33 +206,89 @@ export class ShadowGraph {
   }
 
   private static validateSemanticInvariants(ir: CanonicalIR) {
-    const entityNames = new Set(ir.entities.map((e) => e.name));
+    const RESERVED_KEYWORDS = new Set([
+      "select", "table", "update", "delete", "insert", "where", "user", "group", "order", "by", "prismaclient", "model", "view", "index", "unique", "primary", "key"
+    ]);
+    const NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]{0,62}$/;
 
-    // Invariant 1: Uniqueness
-    if (entityNames.size !== ir.entities.length) {
-      throw new Error("Semantic Violation: Duplicate entity names detected.");
+    const entityNames = new Set<string>();
+
+    // 1. Entity and Field Level Constraints
+    for (const entity of ir.entities) {
+      // 1a. Naming and Reserved Keywords
+      if (!NAME_REGEX.test(entity.name)) throw new Error(`Schema Violation: Invalid entity name '${entity.name}'. Must start with a letter and contain only alphanumeric characters or underscores (max 63 chars).`);
+      if (RESERVED_KEYWORDS.has(entity.name.toLowerCase())) throw new Error(`Schema Violation: '${entity.name}' is a reserved SQL/ORM keyword and cannot be used as a table name.`);
+      if (entityNames.has(entity.name.toLowerCase())) throw new Error(`Schema Violation: Duplicate entity name '${entity.name}' detected.`);
+      entityNames.add(entity.name.toLowerCase());
+
+      const fieldNames = new Set<string>();
+      let hasPrimaryKey = false;
+
+      for (const field of entity.fields) {
+        if (!NAME_REGEX.test(field.name)) throw new Error(`Schema Violation: Invalid field name '${entity.name}.${field.name}'.`);
+        if (RESERVED_KEYWORDS.has(field.name.toLowerCase())) throw new Error(`Schema Violation: '${field.name}' is a reserved keyword.`);
+        if (fieldNames.has(field.name.toLowerCase())) throw new Error(`Schema Violation: Duplicate field name '${field.name}' in entity '${entity.name}'.`);
+        fieldNames.add(field.name.toLowerCase());
+
+        // 1b. Primary Key Integrity
+        if (field.isPrimaryKey) {
+          hasPrimaryKey = true;
+          if (field.nullable) throw new Error(`Schema Violation: Primary Key '${entity.name}.${field.name}' cannot be nullable.`);
+          if (['boolean', 'json', 'datetime'].includes(field.type)) throw new Error(`Schema Violation: Primary Key '${entity.name}.${field.name}' cannot be of type '${field.type}'.`);
+        }
+
+        // 1c. Uniqueness Constraints
+        if (field.unique && field.type === 'boolean') {
+          throw new Error(`Schema Violation: Boolean field '${entity.name}.${field.name}' cannot be marked unique, as it would limit the table to exactly two rows.`);
+        }
+      }
+
+      // 1d. Mandatory PK Check
+      if (!hasPrimaryKey && (!entity.primaryKey || entity.primaryKey.length === 0)) {
+        throw new Error(`Schema Violation: Entity '${entity.name}' must have at least one Primary Key field or a composite Primary Key.`);
+      }
+
+      // 1e. Composite Index Validation
+      if (entity.indexes) {
+        for (const idx of entity.indexes) {
+          for (const f of idx.fields) {
+            if (!fieldNames.has(f.toLowerCase())) throw new Error(`Schema Violation: Index on '${entity.name}' references non-existent field '${f}'.`);
+          }
+        }
+      }
     }
 
-    // Invariant 2: Referential Integrity for Relations
+    // 2. Relational Physics (Foreign Keys)
     for (const relation of ir.relations) {
-      if (!entityNames.has(relation.sourceEntity)) {
-        throw new Error(
-          `Referential Integrity Violation: Source entity '${relation.sourceEntity}' does not exist.`,
-        );
+      const srcEnt = ir.entities.find(e => e.name.toLowerCase() === relation.sourceEntity.toLowerCase());
+      const tgtEnt = ir.entities.find(e => e.name.toLowerCase() === relation.targetEntity.toLowerCase());
+
+      if (!srcEnt || !tgtEnt) {
+        throw new Error(`Referential Violation: Relation connects missing entities ('${relation.sourceEntity}' -> '${relation.targetEntity}').`);
       }
-      if (!entityNames.has(relation.targetEntity)) {
-        throw new Error(
-          `Referential Integrity Violation: Target entity '${relation.targetEntity}' does not exist.`,
-        );
+
+      // 2a. Strict Type Equivalence & Arity
+      if (relation.sourceField && relation.targetField) {
+        const srcF = srcEnt.fields.find(f => f.name === relation.sourceField);
+        const tgtF = tgtEnt.fields.find(f => f.name === relation.targetField);
+
+        if (!srcF) throw new Error(`Referential Violation: Source field '${relation.sourceField}' missing on '${srcEnt.name}'.`);
+        if (!tgtF) throw new Error(`Referential Violation: Target field '${relation.targetField}' missing on '${tgtEnt.name}'.`);
+
+        if (srcF.type !== tgtF.type) {
+          throw new Error(`Type Mismatch: Foreign key '${srcEnt.name}.${srcF.name}' (${srcF.type}) must exactly match target '${tgtEnt.name}.${tgtF.name}' (${tgtF.type}).`);
+        }
+
+        if (relation.type === 'ONE_TO_ONE' && !srcF.unique && !srcF.isPrimaryKey) {
+          throw new Error(`Cardinality Violation: ONE_TO_ONE relation requires the foreign key '${srcEnt.name}.${srcF.name}' to be marked as @unique.`);
+        }
       }
     }
 
-    // Invariant 3: Referential Integrity for Endpoints
+    // 3. Endpoint Integrity
     for (const endpoint of ir.endpoints) {
-      if (endpoint.targetEntity && !entityNames.has(endpoint.targetEntity)) {
-        throw new Error(
-          `Referential Integrity Violation: Endpoint targets entity '${endpoint.targetEntity}', which does not exist.`,
-        );
+      if (endpoint.targetEntity && !entityNames.has(endpoint.targetEntity.toLowerCase())) {
+        throw new Error(`Referential Violation: Endpoint targets missing entity '${endpoint.targetEntity}'.`);
       }
     }
   }

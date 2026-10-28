@@ -1,3 +1,5 @@
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useState, useRef, useEffect } from 'react';
 import { useArchitectureStore } from '../../store/architectureStore';
 
@@ -109,8 +111,11 @@ export function CopilotDrawer({ onSubmit, isThinking }: CopilotDrawerProps) {
             }>
               {msg.role === 'user' ? 'You' : msg.role === 'warn' ? 'Heads up' : 'Copilot'}
             </b>
-            <br />
-            {msg.content}
+            <div className="mt-1.5 prose prose-invert prose-p:leading-snug prose-pre:bg-[#0b0c10] prose-pre:border prose-pre:border-white/[0.09] prose-pre:rounded-md prose-code:text-[#b5adf2] prose-code:bg-white/[0.045] prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none max-w-none text-[12.5px]">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {msg.content}
+              </ReactMarkdown>
+            </div>
           </div>
         ))}
 
